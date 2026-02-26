@@ -1,0 +1,40 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Profile",
+  "description": "Profile used by Module E (e.g. Capital One) to fill applications",
+  "type": "object",
+  "required": ["cpn", "first_name", "last_name", "email", "phone", "address", "date_of_birth", "annual_income", "job_type", "time_at_address", "time_on_job"],
+  "properties": {
+    "cpn": { "type": "string", "pattern": "^[0-9]{3}-[0-9]{2}-[0-9]{4}$" },
+    "first_name": { "type": "string", "minLength": 1 },
+    "middle_initial": { "type": "string", "maxLength": 1 },
+    "last_name": { "type": "string", "minLength": 1 },
+    "us_citizen": { "type": "boolean", "description": "U.S. citizen (Capital One step 2)" },
+    "secondary_citizenship": { "type": "boolean", "description": "Citizenship in another country (Capital One: false = No)" },
+    "resident_type": { "type": "string", "enum": ["Resident", "Nonresident"], "description": "U.S. residency status (Capital One step 2)" },
+    "email": { "type": "string", "format": "email" },
+    "phone": { "type": "string" },
+    "address": {
+      "type": "object",
+      "required": ["street", "city", "state", "zip", "country"],
+      "properties": {
+        "street": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zip": { "type": "string" },
+        "country": { "type": "string" }
+      }
+    },
+    "date_of_birth": { "type": "string", "description": "MM/DD/YYYY" },
+    "annual_income_min": { "type": "integer", "minimum": 50000, "maximum": 80000 },
+    "annual_income_max": { "type": "integer", "minimum": 50000, "maximum": 80000 },
+    "annual_income": { "type": "integer", "minimum": 50000, "maximum": 80000, "description": "Single value for forms (within 50k-80k)" },
+    "job_type": { "type": "string", "enum": ["Self Employed", "Employed", "Other"] },
+    "time_at_address_years": { "type": "integer", "minimum": 0 },
+    "time_at_address_months": { "type": "integer", "minimum": 0, "maximum": 11 },
+    "time_at_address": { "type": "string", "description": "e.g. 5 Years 5 Months" },
+    "time_on_job_years": { "type": "integer", "minimum": 0 },
+    "time_on_job_months": { "type": "integer", "minimum": 0, "maximum": 11 },
+    "time_on_job": { "type": "string", "description": "e.g. 5 Years 5 Months" }
+  }
+}

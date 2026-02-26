@@ -1,0 +1,106 @@
+# Module A — Steve Morse SSN Prefix (Steps 1–2)
+
+Gets a valid partial CPN (AAA-GG-XXXX) from the Steve Morse decoding rules.
+
+## Setup (venv)
+
+From the project root (`cpn/`), use a virtual environment:
+
+**Windows (PowerShell):**
+```powershell
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+playwright install chromium
+```
+
+**Windows (cmd):**
+```cmd
+python -m venv venv
+venv\Scripts\activate.bat
+pip install -r requirements.txt
+playwright install chromium
+```
+
+**macOS / Linux:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+```
+
+Then run any of the commands below from the same shell (with venv activated).
+
+## Input
+
+- **state** — e.g. `"Florida"`, `"California"`. For states with multiple area ranges (e.g. Louisiana 1936–1999 vs 2000–....), the module **always** uses the latest “was issued in” period only (e.g. Louisiana (2000-....), never Louisiana (1936-1999)).
+- **config** (optional) — `prefer_recent` is ignored; latest issuance date is always used.
+
+## Output
+
+Writes **`data/partial_cpn.json`** (or path given by `--output`):
+
+```json
+{
+  "area_range": [766, 772],
+  "area": "772",
+  "group": "11",
+  "partial": "772-11-XXXX",
+  "state": "Florida",
+  "date_range_used": "Florida (2001-....)",
+  "error": null,
+  "ok": true
+}
+```
+
+On error, `ok` is `false`, `error` is set, and other fields may be `null`.
+
+## Run
+
+From repo root (`cpn/`):
+
+```bash
+# Default state Florida, writes data/partial_cpn.json
+python -m modules.steve_morse_prefix
+
+# Explicit state
+python -m modules.steve_morse_prefix California
+
+# Custom output and data file
+python -m modules.steve_morse_prefix Florida -o data/partial_cpn.json -d modules/steve_morse_prefix/state_area_ranges.json
+```
+
+Or run the script directly:
+
+```bash
+python modules/steve_morse_prefix/steve_morse.py Florida -o data/partial_cpn.json
+```
+
+## Data source
+
+The state→area mapping is read from **`state_area_ranges.json`** in this module (collated from the Steve Morse page; no HTML parsing at runtime). The file is an array of `{ "label": "Florida (2001-....)", "low": 766, "high": 772 }`. To regenerate it from a new HTML snapshot, run:
+
+```bash
+python modules/steve_morse_prefix/extract_ranges.py
+```
+
+(Requires `stevemorse.html` in the repo root.)
+
+## Playwright automation (five-digit decoder)
+
+To get a **verified** 5-digit prefix (area + group) using the live Steve Morse site (Steps 2b + 4 in `note.md`), use the venv above, then:
+
+```bash
+# Run (default state Florida; uses 20s delay between group tries to reduce rate limiting)
+python -m modules.steve_morse_prefix.run_five_digit_decoder Florida --headless
+
+# With output file and shorter delay (faster but higher rate-limit risk)
+python -m modules.steve_morse_prefix.run_five_digit_decoder California -o data/partial_cpn.json --delay 5 --headless
+```
+
+Output is JSON, e.g. `{ "ok": true, "prefix_5": "769-99", "area": "769", "group": "99", "state": "Florida", "date_range_used": "Florida (2001-....)", "verified_range": [766, 772] }`. See `INVESTIGATION_STEPHEN_MORSE_FLOW.md` for selectors and behavior.
+
+## Failure isolation
+
+If the data file is missing or the state is unknown, this module writes the error into the output JSON and returns a non-zero exit code. Downstream modules (B, C, …) should not run until `partial_cpn.json` has `ok === true`.

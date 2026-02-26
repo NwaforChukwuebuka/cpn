@@ -1,0 +1,422 @@
+[
+  {
+    "label": "New Hampshire",
+    "low": 1,
+    "high": 3
+  },
+  {
+    "label": "Maine",
+    "low": 4,
+    "high": 7
+  },
+  {
+    "label": "Vermont",
+    "low": 8,
+    "high": 9
+  },
+  {
+    "label": "Massachusetts",
+    "low": 10,
+    "high": 34
+  },
+  {
+    "label": "Rhode Island",
+    "low": 35,
+    "high": 39
+  },
+  {
+    "label": "Connecticut",
+    "low": 40,
+    "high": 49
+  },
+  {
+    "label": "New York",
+    "low": 50,
+    "high": 134
+  },
+  {
+    "label": "New Jersey",
+    "low": 135,
+    "high": 158
+  },
+  {
+    "label": "Pennsylvania",
+    "low": 159,
+    "high": 211
+  },
+  {
+    "label": "Maryland",
+    "low": 212,
+    "high": 220
+  },
+  {
+    "label": "Delaware",
+    "low": 221,
+    "high": 222
+  },
+  {
+    "label": "Virginia (1936-2004)",
+    "low": 223,
+    "high": 231
+  },
+  {
+    "label": "North Carolina and West Virginia",
+    "low": 232,
+    "high": 232
+  },
+  {
+    "label": "West Virginia",
+    "low": 233,
+    "high": 236
+  },
+  {
+    "label": "North Carolina (1936-2002)",
+    "low": 237,
+    "high": 246
+  },
+  {
+    "label": "South Carolina (1936-1996)",
+    "low": 247,
+    "high": 251
+  },
+  {
+    "label": "Georgia (1936-1997)",
+    "low": 252,
+    "high": 260
+  },
+  {
+    "label": "Florida (1936-1980)",
+    "low": 261,
+    "high": 267
+  },
+  {
+    "label": "Ohio",
+    "low": 268,
+    "high": 302
+  },
+  {
+    "label": "Indiana",
+    "low": 303,
+    "high": 317
+  },
+  {
+    "label": "Illinois",
+    "low": 318,
+    "high": 361
+  },
+  {
+    "label": "Michigan",
+    "low": 362,
+    "high": 386
+  },
+  {
+    "label": "Wisconsin",
+    "low": 387,
+    "high": 399
+  },
+  {
+    "label": "Kentucky",
+    "low": 400,
+    "high": 407
+  },
+  {
+    "label": "Tennessee (1936-2005)",
+    "low": 408,
+    "high": 415
+  },
+  {
+    "label": "Alabama",
+    "low": 416,
+    "high": 424
+  },
+  {
+    "label": "Mississippi (1936-2007)",
+    "low": 425,
+    "high": 428
+  },
+  {
+    "label": "Arkansas (1936-2001)",
+    "low": 429,
+    "high": 432
+  },
+  {
+    "label": "Louisiana (1936-1999)",
+    "low": 433,
+    "high": 439
+  },
+  {
+    "label": "Oklahoma",
+    "low": 440,
+    "high": 448
+  },
+  {
+    "label": "Texas (1936-1988)",
+    "low": 449,
+    "high": 467
+  },
+  {
+    "label": "Minnesota",
+    "low": 468,
+    "high": 477
+  },
+  {
+    "label": "Iowa",
+    "low": 478,
+    "high": 485
+  },
+  {
+    "label": "Missouri",
+    "low": 486,
+    "high": 500
+  },
+  {
+    "label": "North Dakota",
+    "low": 501,
+    "high": 502
+  },
+  {
+    "label": "South Dakota",
+    "low": 503,
+    "high": 504
+  },
+  {
+    "label": "Nebraska",
+    "low": 505,
+    "high": 508
+  },
+  {
+    "label": "Kansas",
+    "low": 509,
+    "high": 515
+  },
+  {
+    "label": "Montana",
+    "low": 516,
+    "high": 517
+  },
+  {
+    "label": "Idaho",
+    "low": 518,
+    "high": 519
+  },
+  {
+    "label": "Wyoming",
+    "low": 520,
+    "high": 520
+  },
+  {
+    "label": "Colorado (1936-1996)",
+    "low": 521,
+    "high": 524
+  },
+  {
+    "label": "New Mexico (1936-1993)",
+    "low": 525,
+    "high": 525
+  },
+  {
+    "label": "Arizona (1936-1983)",
+    "low": 526,
+    "high": 527
+  },
+  {
+    "label": "Utah (1936-1992)",
+    "low": 528,
+    "high": 529
+  },
+  {
+    "label": "Nevada (1936-1997)",
+    "low": 530,
+    "high": 530
+  },
+  {
+    "label": "Washington",
+    "low": 531,
+    "high": 539
+  },
+  {
+    "label": "Oregon",
+    "low": 540,
+    "high": 544
+  },
+  {
+    "label": "California (1936-1987)",
+    "low": 545,
+    "high": 573
+  },
+  {
+    "label": "Alaska",
+    "low": 574,
+    "high": 574
+  },
+  {
+    "label": "Hawaii (1936-2004)",
+    "low": 575,
+    "high": 576
+  },
+  {
+    "label": "District of Columbia",
+    "low": 577,
+    "high": 579
+  },
+  {
+    "label": "Virgin Islands",
+    "low": 580,
+    "high": 580
+  },
+  {
+    "label": "Puerto Rico (1936-1985)",
+    "low": 580,
+    "high": 584
+  },
+  {
+    "label": "New Mexico (1958-1993)",
+    "low": 585,
+    "high": 585
+  },
+  {
+    "label": "Pacific Islands",
+    "low": 586,
+    "high": 586
+  },
+  {
+    "label": "Mississippi (1964-2007)",
+    "low": 587,
+    "high": 588
+  },
+  {
+    "label": "Florida (1980-2001)",
+    "low": 589,
+    "high": 595
+  },
+  {
+    "label": "Puerto Rico (1985-....)",
+    "low": 596,
+    "high": 599
+  },
+  {
+    "label": "Arizona (1983-2000)",
+    "low": 600,
+    "high": 601
+  },
+  {
+    "label": "California (1987-....)",
+    "low": 602,
+    "high": 626
+  },
+  {
+    "label": "Texas (1988-....)",
+    "low": 627,
+    "high": 645
+  },
+  {
+    "label": "Utah (1989-....)",
+    "low": 646,
+    "high": 647
+  },
+  {
+    "label": "New Mexico (1993-....)",
+    "low": 648,
+    "high": 649
+  },
+  {
+    "label": "Colorado (1996-....)",
+    "low": 650,
+    "high": 653
+  },
+  {
+    "label": "South Carolina (1997-....)",
+    "low": 654,
+    "high": 658
+  },
+  {
+    "label": "Louisiana (2000-....)",
+    "low": 659,
+    "high": 665
+  },
+  {
+    "label": "unassigned-1",
+    "low": 666,
+    "high": 666
+  },
+  {
+    "label": "Georgia (1997-....)",
+    "low": 667,
+    "high": 675
+  },
+  {
+    "label": "Arkansas (2001-....)",
+    "low": 676,
+    "high": 679
+  },
+  {
+    "label": "Nevada (1997-....)",
+    "low": 680,
+    "high": 680
+  },
+  {
+    "label": "North Carolina (2002-....)",
+    "low": 681,
+    "high": 690
+  },
+  {
+    "label": "Virginia (2004-....)",
+    "low": 691,
+    "high": 699
+  },
+  {
+    "label": "Railroad workers (1936-1963)",
+    "low": 700,
+    "high": 728
+  },
+  {
+    "label": "Enumeraton at Entry (2003-....)",
+    "low": 729,
+    "high": 733
+  },
+  {
+    "label": "unassigned-2",
+    "low": 734,
+    "high": 749
+  },
+  {
+    "label": "Hawaii (2004-....)",
+    "low": 750,
+    "high": 751
+  },
+  {
+    "label": "Mississippi (2007-....)",
+    "low": 752,
+    "high": 755
+  },
+  {
+    "label": "Tennessee (2006-....)",
+    "low": 756,
+    "high": 763
+  },
+  {
+    "label": "Arizona (2000-....)",
+    "low": 764,
+    "high": 765
+  },
+  {
+    "label": "Florida (2001-....)",
+    "low": 766,
+    "high": 772
+  },
+  {
+    "label": "unassigned-3",
+    "low": 773,
+    "high": 799
+  },
+  {
+    "label": "not valid",
+    "low": 800,
+    "high": 899
+  },
+  {
+    "label": "Individual Taxpayer Identification Number",
+    "low": 900,
+    "high": 999
+  }
+]

@@ -1,0 +1,246 @@
+"""
+Playwright automation: get first five digits (AAA-GG) via Steve Morse SSN decoder.
+
+Implements the flow in note.md and INVESTIGATION_STEPHEN_MORSE_FLOW.md:
+  1. Resolve state to latest issuance period from state_area_ranges.json.
+  2. On https://stevemorse.org/ssn/ssn.html: select that state in Three-Digit Decoder,
+     verify 3-digit range matches config (prefer website if mismatch).
+  3. Pick random 3-digit area in verified range.
+  4. On Five-Digit Decoder: set area, then try random groups until #wherewhen shows
+     "Not Issued"; return that area+group as the 5-digit prefix.
+
+Rate limiting: each Five-Digit lookup hits the server; use --delay between tries
+(e.g. 20+ seconds) to avoid bans.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import random
+import sys
+from pathlib import Path
+
+from .steve_morse import DEFAULT_DATA_PATH, get_latest_state_range
+
+try:
+    from playwright.sync_api import sync_playwright
+except ImportError:
+    sync_playwright = None  # type: ignore[misc, assignment]
+
+URL = "https://stevemorse.org/ssn/ssn.html"
+NOT_ISSUED_MARKER = "Not Issued"
+MAX_GROUP_TRIES = 99
+DEFAULT_DELAY_SECONDS = 20
+
+
+def _parse_ssn_range(text: str) -> tuple[int, int] | None:
+    """Parse '766 to 772' -> (766, 772). Returns None if format doesn't match."""
+    if not text or " to " not in text:
+        return None
+    parts = text.strip().split(" to ", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        low = int(parts[0].strip())
+        high = int(parts[1].strip())
+        if 1 <= low <= high <= 999:
+            return (low, high)
+    except ValueError:
+        pass
+    return None
+
+
+def _run_flow(
+    state: str,
+    data_path: Path | None,
+    delay_seconds: float,
+    headless: bool,
+) -> dict:
+    """
+    Run the full flow in the browser. Returns a result dict suitable for JSON output.
+    """
+    config = get_latest_state_range(state, data_path)
+    if not config:
+        return {
+            "ok": False,
+            "error": f"State not found or no data: {state}. Check state_area_ranges.json.",
+            "prefix_5": None,
+            "area": None,
+            "group": None,
+            "state": state,
+            "date_range_used": None,
+            "verified_range": None,
+        }
+
+    config_label = config["label"]
+    config_low = config["low"]
+    config_high = config["high"]
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=headless)
+        try:
+            page = browser.new_page()
+
+            # Step 1: Navigate
+            page.goto(URL, wait_until="domcontentloaded", timeout=30_000)
+
+            # Step 2b: Select latest state in Three-Digit Decoder and read 3-digit range
+            state_select = page.locator('select[name="state"]')
+            state_select.select_option(label=config_label)
+
+            # Read the "SSN starting with" range (e.g. "766 to 772")
+            ssn_option = page.locator('select[name="ssn"]').evaluate(
+                """(sel) => {
+                    const opt = sel.options[sel.selectedIndex];
+                    return opt ? opt.textContent.trim() : '';
+                }"""
+            )
+            web_range = _parse_ssn_range(ssn_option) if ssn_option else None
+
+            if web_range is None:
+                return {
+                    "ok": False,
+                    "error": f"Could not read 3-digit range from page (got: {ssn_option!r})",
+                    "prefix_5": None,
+                    "area": None,
+                    "group": None,
+                    "state": state,
+                    "date_range_used": config_label,
+                    "verified_range": [config_low, config_high],
+                }
+
+            web_low, web_high = web_range
+            if (web_low, web_high) != (config_low, config_high):
+                # Prefer website per note.md
+                low, high = web_low, web_high
+            else:
+                low, high = config_low, config_high
+
+            # Step 3: Random area in verified range
+            area = random.randint(low, high)
+            area_str = f"{area:03d}"
+
+            # Step 4: Five-Digit Decoder — set area, then try groups until "Not Issued"
+            page.locator('select[name="ssn1"]').select_option(value=area_str)
+
+            groups = [f"{i:02d}" for i in range(1, 100)]
+            random.shuffle(groups)
+            found_group: str | None = None
+            last_result_text: str | None = None
+
+            for i, group in enumerate(groups):
+                if i >= MAX_GROUP_TRIES:
+                    break
+
+                page.locator('select[name="ssn2"]').select_option(value=group)
+
+                # Wait for result: either wait for network (ssn.php) or for #wherewhen to update
+                page.wait_for_timeout(800)
+                result_el = page.locator("#wherewhen")
+                result_el.wait_for(state="visible", timeout=5_000)
+                text = result_el.text_content() or ""
+                text = text.strip()
+                last_result_text = text
+
+                if NOT_ISSUED_MARKER in text:
+                    found_group = group
+                    break
+
+                if i < len(groups) - 1 and delay_seconds > 0:
+                    page.wait_for_timeout(int(delay_seconds * 1000))
+
+            if found_group is None:
+                return {
+                    "ok": False,
+                    "error": f"Did not find a 'Not Issued' group after {MAX_GROUP_TRIES} tries. Last result: {last_result_text!r}. Consider rate limit / delays.",
+                    "prefix_5": None,
+                    "area": area_str,
+                    "group": None,
+                    "state": state,
+                    "date_range_used": config_label,
+                    "verified_range": [low, high],
+                }
+
+            prefix_5 = f"{area_str}-{found_group}"
+            return {
+                "ok": True,
+                "error": None,
+                "prefix_5": prefix_5,
+                "area": area_str,
+                "group": found_group,
+                "state": state,
+                "date_range_used": config_label,
+                "verified_range": [low, high],
+            }
+
+        finally:
+            browser.close()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Get first 5 digits (AAA-GG) via Steve Morse SSN decoder (Playwright)."
+    )
+    parser.add_argument(
+        "state",
+        nargs="?",
+        default="Florida",
+        help="State name (e.g. Florida, California)",
+    )
+    parser.add_argument(
+        "--data",
+        "-d",
+        type=Path,
+        default=None,
+        help="Path to state_area_ranges.json",
+    )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=DEFAULT_DELAY_SECONDS,
+        help=f"Seconds between Five-Digit group tries (default {DEFAULT_DELAY_SECONDS})",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run browser headless",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
+        help="Write result JSON to file (default: print only)",
+    )
+    args = parser.parse_args()
+
+    if sync_playwright is None:
+        print(
+            json.dumps({
+                "ok": False,
+                "error": "Playwright not installed. Run: pip install playwright && playwright install chromium",
+            }),
+            indent=2,
+        )
+        return 1
+
+    data_path = args.data or DEFAULT_DATA_PATH
+    result = _run_flow(
+        state=args.state,
+        data_path=data_path,
+        delay_seconds=args.delay,
+        headless=args.headless,
+    )
+
+    out = json.dumps(result, indent=2)
+    if args.output is not None:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(out, encoding="utf-8")
+    print(out)
+
+    return 0 if result.get("ok") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

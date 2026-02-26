@@ -1,0 +1,31 @@
+{
+  "first_name": "Tyler",
+  "middle_initial": "",
+  "last_name": "Smith",
+  "us_citizen": true,
+  "secondary_citizenship": false,
+  "resident_type": "Resident",
+  "email": "tylersmith01@gmail.com",
+  "phone": "312-282-3838",
+  "address": {
+    "street": "330 Whitmire Rd",
+    "city": "Madisonville",
+    "state": "TX",
+    "zip": "77864",
+    "country": "United States"
+  },
+  "date_of_birth": "01/09/1999",
+  "annual_income_min": 50000,
+  "annual_income_max": 80000,
+  "annual_income": 65000,
+  "monthly_rent": 1500,
+  "bank_account_type": true,
+  "cash_advance": true,
+  "job_type": "Self Employed",
+  "time_at_address_years": 5,
+  "time_at_address_months": 5,
+  "time_at_address": "5 Years 5 Months",
+  "time_on_job_years": 5,
+  "time_on_job_months": 5,
+  "time_on_job": "5 Years 5 Months"
+}

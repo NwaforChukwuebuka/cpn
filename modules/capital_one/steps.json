@@ -1,0 +1,92 @@
+{
+  "apply_url": "https://applynow.capitalone.com/?productId=37216",
+  "steps": [
+    {
+      "step": 1,
+      "description": "Legal name",
+      "fields": [
+        {"profile_key": "capital_one.legal_first_name", "label": "Legal first name", "selector": "#FIRST_NAME"},
+        {"profile_key": "capital_one.legal_middle_initial", "label": "MI", "selector": "#MIDDLE_NAME"},
+        {"profile_key": "capital_one.legal_last_name", "label": "Legal last name", "selector": "#LAST_NAME"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 2,
+      "description": "U.S. citizenship; then either secondary citizenship OR residency (whichever is asked)",
+      "fields": [
+        {"profile_key": "us_citizen", "type": "radio", "label": "Yes", "selectors": ["label[for='US_CITIZENSHIP:yes']", "label[for='gravity-radio-usacitizen-radio-0']"]},
+        {"profile_key": "secondary_citizenship", "type": "radio", "label": "No", "select_when": "false", "optional": true, "selectors": ["label[for='SECONDARY_CITIZENSHIP:no']", "label[for='gravity-radio-dualcitizen-radio-1']"]},
+        {"profile_key": "resident_type", "type": "radio", "label": "Resident", "optional": true, "selectors": ["label[for='gravity-radio-residenttype-radio-0']", "label[for*='residenttype'][for*='radio-0']"]}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 3,
+      "description": "Address (Where do you live?)",
+      "fields": [
+        {"profile_key": "address.street", "label": "Residential address", "selector": "#PHYSICAL_STREET_ADDRESS", "google_autocomplete": true},
+        {"profile_key": "address.line2", "label": "Apt/suite (if applicable)", "selector": "#PHYSICAL_APT_SUITE"},
+        {"profile_key": "address.zip", "label": "ZIP code", "selector": "#PHYSICAL_ZIPCODE"},
+        {"profile_key": "address.city", "label": "City", "selector": "#PHYSICAL_CITY"},
+        {"profile_key": "address.state", "label": "State", "selector": "#PHYSICAL_STATE"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 4,
+      "description": "Contact (email, phone)",
+      "fields": [
+        {"profile_key": "email", "label": "Email address", "selector": "#EMAIL"},
+        {"profile_key": "phone", "label": "Primary phone number", "selector": "#PHONE_NUMBER"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 5,
+      "description": "Employment status",
+      "fields": [
+        {"profile_key": "job_type", "type": "radio", "label": "Self-employed", "selector": "label[for='EMPLOYMENT:SEP']"},
+        {"profile_key": "occupation", "label": "Occupation", "selector": "#OCCUPATION"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 6,
+      "description": "Finances (income, monthly rent)",
+      "fields": [
+        {"profile_key": "annual_income", "label": "Total annual income", "selector": "#INCOME"},
+        {"profile_key": "monthly_rent", "label": "Monthly rent/mortgage", "selector": "#HOUSING"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 7,
+      "description": "Banking",
+      "fields": [
+        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selector": "label[for='BANK_ACCOUNT:CAS']"},
+        {"profile_key": "cash_advance", "type": "radio", "label": "Yes", "selector": "label[for='CASH_ADVANCE:true']"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    },
+    {
+      "step": 8,
+      "description": "Identity (DOB, SSN)",
+      "fields": [
+        {"profile_key": "date_of_birth", "label": "Date of birth (MM/DD/YYYY)", "selector": "#DOB"},
+        {"profile_key": "ssn_formatted", "label": "Social Security Number (or ITIN)", "selector": "#SSN"},
+        {"profile_key": "ssn_formatted", "label": "Confirm Social Security Number (or ITIN)", "selector": "#CONFIRM_SSN"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"
+    }
+  ],
+  "note": "Steps 1–8 match Pages 1–8 of the application. Field selectors from step_03_3_of_8.html and related pages."
+}
