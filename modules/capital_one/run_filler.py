@@ -761,6 +761,51 @@ def _save_agreement_page_html(page, save_dir: Path | None) -> None:
         _log(f"Could not save agreement page HTML: {e}")
 
 
+def _check_agreement_boxes(page) -> list[str]:
+    """
+    On the agreement page (after step 8), check the two required authorization checkboxes.
+    Note: communication language defaults to English and is intentionally left unchanged.
+    """
+    errors: list[str] = []
+    required_boxes = [
+        ("Paperless communications", "ELECTRONIC_COMMUNICATIONS_DISCLOSURE"),
+        ("SSN verification authorization", "SSN_VERIFICATION_AUTHORIZATION"),
+    ]
+
+    _log("Waiting for agreement page checkboxes...")
+    first_box = page.locator(f'input[type="checkbox"]#{required_boxes[0][1]}')
+    try:
+        first_box.first.wait_for(state="visible", timeout=30000)
+    except Exception as e:
+        msg = f"Agreement page did not become ready: {e}"
+        _log(f"  ERROR: {msg}")
+        return [msg]
+
+    for label, box_id in required_boxes:
+        try:
+            loc = page.locator(f'input[type="checkbox"]#{box_id}')
+            if _count(loc) == 0:
+                raise RuntimeError(f"Checkbox #{box_id} not found")
+            box = loc.first
+            box.wait_for(state="visible", timeout=7000)
+            if box.is_checked():
+                _log(f"  {label}: already checked.")
+                continue
+            _log(f"  Checking {label}...")
+            try:
+                box.check(force=True)
+            except Exception:
+                box.click(force=True)
+            if not box.is_checked():
+                raise RuntimeError("checkbox did not stay checked")
+            _log(f"  {label}: checked.")
+        except Exception as e:
+            _log(f"  ERROR checking {label}: {e}")
+            errors.append(f"{label}: {e}")
+
+    return errors
+
+
 def run_filler(
     profile_path: Path,
     steps_config_path: Path,
@@ -982,7 +1027,10 @@ def run_filler(
             finally:
                 last_step_num = steps_list[-1].get("step", len(steps_list)) if steps_list else 0
                 if steps_completed == last_step_num:
-                    _log("Page 8 completed; leaving browser open for the agreement page.")
+                    _log("Page 8 completed; handling agreement page checkboxes.")
+                    agreement_errors = _check_agreement_boxes(page)
+                    if agreement_errors:
+                        all_errors.extend([f"Agreement page: {e}" for e in agreement_errors])
                     _save_agreement_page_html(page, save_html_dir)
                 else:
                     _log("Closing browser...")
