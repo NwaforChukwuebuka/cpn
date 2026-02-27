@@ -318,6 +318,24 @@ def fill_step(
     return errors
 
 
+def _click_agreement_next_button(page) -> bool:
+    """Click the Next button on the agreement page (after verifying information). Returns True if clicked."""
+    patterns = [
+        page.locator("button.next-btn"),
+        page.get_by_role("button", name=re.compile(r"^next$", re.I)),
+        page.locator("button:has-text('Next')"),
+    ]
+    for loc in patterns:
+        try:
+            if _count(loc) > 0:
+                loc.first.wait_for(state="visible", timeout=5000)
+                loc.first.click()
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _count(locator) -> int:
     try:
         return locator.count()
@@ -1031,6 +1049,12 @@ def run_filler(
                     agreement_errors = _check_agreement_boxes(page)
                     if agreement_errors:
                         all_errors.extend([f"Agreement page: {e}" for e in agreement_errors])
+                    else:
+                        _log("Clicking Next on agreement page...")
+                        if _click_agreement_next_button(page):
+                            _log("Clicked Next.")
+                        else:
+                            _log("Warning: Next button not found or not clickable.")
                     _save_agreement_page_html(page, save_html_dir)
                 else:
                     _log("Closing browser...")
