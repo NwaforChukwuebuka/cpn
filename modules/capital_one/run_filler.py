@@ -321,7 +321,7 @@ def fill_step(
 def _click_agreement_next_button(page) -> bool:
     """Click the Next button on the agreement page (after verifying information). Returns True if clicked."""
     patterns = [
-        page.locator("button.next-btn"),
+        page.locator("button.next-btn:not(.preapprove-btn)"),  # Next, not Submit my application
         page.get_by_role("button", name=re.compile(r"^next$", re.I)),
         page.locator("button:has-text('Next')"),
     ]
@@ -329,6 +329,25 @@ def _click_agreement_next_button(page) -> bool:
         try:
             if _count(loc) > 0:
                 loc.first.wait_for(state="visible", timeout=5000)
+                loc.first.click()
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _click_agreement_submit_button(page) -> bool:
+    """Click the final 'Submit my application' button on the agreement page (after Next). Returns True if clicked."""
+    patterns = [
+        page.locator("[data-testid='preapprove-cta-button']"),
+        page.get_by_role("button", name=re.compile(r"submit\s+my\s+application", re.I)),
+        page.locator("button.preapprove-btn"),
+        page.locator("button:has-text('Submit my application')"),
+    ]
+    for loc in patterns:
+        try:
+            if _count(loc) > 0:
+                loc.first.wait_for(state="visible", timeout=10000)
                 loc.first.click()
                 return True
         except Exception:
@@ -924,117 +943,120 @@ def run_filler(
                         except Exception:
                             pass
                 if not nav_ok:
-                    raise PlaywrightTimeout(f"Failed to navigate to apply page after retries: {last_nav_error}")
+                    err_msg = f"Failed to navigate to apply page after retries: {last_nav_error}"
+                    all_errors.append(err_msg)
+                    _log(f"Navigation failed: {err_msg}")
 
-                # Wait for step 1 form to be visible (SPA renders after load)
-                step1_spec = steps_list[0] if steps_list else {}
-                step1_first_label = None
-                for f in step1_spec.get("fields", []):
-                    if f.get("label") and f.get("type") != "radio":
-                        step1_first_label = f["label"]
-                        break
-                if step1_first_label:
-                    _log(f"Waiting for '{step1_first_label}' to be visible (form ready)...")
-                    try:
-                        page.get_by_label(step1_first_label, exact=False).first.wait_for(
-                            state="visible", timeout=nav_timeout_ms
-                        )
-                        _log("Application form is visible.")
-                        page.wait_for_timeout(500)
-                    except Exception as e:
-                        _log(f"Form did not appear in time: {e}")
-                        all_errors.append(f"Step 1 form not visible: {e}")
-                else:
-                    _log("Waiting 1s for page to settle...")
-                    try:
-                        page.wait_for_timeout(1000)
-                    except Exception:
-                        pass
+                if nav_ok:
+                    # Wait for step 1 form to be visible (SPA renders after load)
+                    step1_spec = steps_list[0] if steps_list else {}
+                    step1_first_label = None
+                    for f in step1_spec.get("fields", []):
+                        if f.get("label") and f.get("type") != "radio":
+                            step1_first_label = f["label"]
+                            break
+                    if step1_first_label:
+                        _log(f"Waiting for '{step1_first_label}' to be visible (form ready)...")
+                        try:
+                            page.get_by_label(step1_first_label, exact=False).first.wait_for(
+                                state="visible", timeout=nav_timeout_ms
+                            )
+                            _log("Application form is visible.")
+                            page.wait_for_timeout(500)
+                        except Exception as e:
+                            _log(f"Form did not appear in time: {e}")
+                            all_errors.append(f"Step 1 form not visible: {e}")
+                    else:
+                        _log("Waiting 1s for page to settle...")
+                        try:
+                            page.wait_for_timeout(1000)
+                        except Exception:
+                            pass
 
-                advance_already_verified_for_step: int | None = None  # set when _verify_advanced_to_next_step confirmed a step
+                    advance_already_verified_for_step: int | None = None  # set when _verify_advanced_to_next_step confirmed a step
 
-                for i, step_spec in enumerate(steps_list):
-                    step_num = step_spec.get("step", i + 1)
-                    if stop_after_step is not None and step_num > stop_after_step:
-                        _log(f"Stopping after step (limit {stop_after_step}).")
-                        break
-                    # Skip re-check if the previous advance verification already confirmed we're on this step.
-                    if advance_already_verified_for_step == step_num:
-                        _log(f"  Advance to step {step_num} already verified; skipping counter re-check.")
-                    elif not _wait_for_expected_step(page, step_num, timeout_ms=15000):
-                        current_step = _get_visible_step_num(page)
-                        # Step 1 only: if counter is unknown but step-1 form is visible, assume we're on step 1
-                        if step_num == 1 and current_step is None:
-                            try:
-                                step1_visible = False
-                                # Try selectors from step config first
-                                for f in step_spec.get("fields", []):
-                                    sel = f.get("selector")
-                                    if not sel:
-                                        continue
-                                    loc = page.locator(sel)
-                                    if _count(loc) > 0 and loc.first.is_visible():
-                                        step1_visible = True
-                                        break
-                                # Fallback by labels if selector check did not succeed
-                                if not step1_visible:
+                    for i, step_spec in enumerate(steps_list):
+                        step_num = step_spec.get("step", i + 1)
+                        if stop_after_step is not None and step_num > stop_after_step:
+                            _log(f"Stopping after step (limit {stop_after_step}).")
+                            break
+                        # Skip re-check if the previous advance verification already confirmed we're on this step.
+                        if advance_already_verified_for_step == step_num:
+                            _log(f"  Advance to step {step_num} already verified; skipping counter re-check.")
+                        elif not _wait_for_expected_step(page, step_num, timeout_ms=15000):
+                            current_step = _get_visible_step_num(page)
+                            # Step 1 only: if counter is unknown but step-1 form is visible, assume we're on step 1
+                            if step_num == 1 and current_step is None:
+                                try:
+                                    step1_visible = False
+                                    # Try selectors from step config first
                                     for f in step_spec.get("fields", []):
-                                        lbl = f.get("label")
-                                        if not lbl:
+                                        sel = f.get("selector")
+                                        if not sel:
                                             continue
-                                        loc = page.get_by_label(lbl, exact=False)
+                                        loc = page.locator(sel)
                                         if _count(loc) > 0 and loc.first.is_visible():
                                             step1_visible = True
                                             break
-                                if step1_visible:
-                                    _log("  Step counter not found; step 1 form is visible, proceeding.")
-                                    current_step = 1
+                                    # Fallback by labels if selector check did not succeed
+                                    if not step1_visible:
+                                        for f in step_spec.get("fields", []):
+                                            lbl = f.get("label")
+                                            if not lbl:
+                                                continue
+                                            loc = page.get_by_label(lbl, exact=False)
+                                            if _count(loc) > 0 and loc.first.is_visible():
+                                                step1_visible = True
+                                                break
+                                    if step1_visible:
+                                        _log("  Step counter not found; step 1 form is visible, proceeding.")
+                                        current_step = 1
+                                except Exception:
+                                    pass
+                            if current_step != step_num:
+                                msg = (
+                                    f"Expected to be on step {step_num} of 8, "
+                                    f"but current visible step is {current_step if current_step is not None else 'unknown'}."
+                                )
+                                _log(f"ERROR: {msg}")
+                                _save_error_html(page, save_html_dir, step_num)
+                                all_errors.append(msg)
+                                break
+                        desc = step_spec.get("description", f"Step {step_num}")
+                        _log(f"--- Step {step_num} of 8: {desc} ---")
+                        # Save this step's page HTML for analysis (1 of 8, 2 of 8, ...)
+                        if save_html_dir is not None:
+                            _save_page_html(page, save_html_dir, step_num)
+                            _log(f"Saved HTML: step_{step_num:02d}_{step_num}_of_8.html")
+                        errs = fill_step(page, profile, step_spec, step_timeout_ms, pause_after_fill_seconds)
+                        if errs:
+                            for e in errs:
+                                _log(f"Step {step_num} error: {e}")
+                            all_errors.extend([f"Step {step_num} ({desc}): {e}" for e in errs])
+                        else:
+                            steps_completed = step_num
+                            _log(f"Step {step_num} done.")
+                        # Verify the form actually advanced before moving on (catches address errors, etc.)
+                        next_i = i + 1
+                        if next_i < len(steps_list) and not errs:
+                            next_spec = steps_list[next_i]
+                            next_step_num = next_spec.get("step", next_i + 1)
+                            advance_err = _verify_advanced_to_next_step(
+                                page, next_spec, step_num, save_html_dir=save_html_dir,
+                                current_step_spec=step_spec, profile=profile,
+                            )
+                            if advance_err:
+                                _log(f"  ERROR: {advance_err}")
+                                all_errors.append(advance_err)
+                                break
+                            # Mark next step as already-verified so the loop doesn't re-check the counter.
+                            advance_already_verified_for_step = next_step_num
+                        else:
+                            try:
+                                page.wait_for_timeout(500)
+                                page.wait_for_load_state("domcontentloaded", timeout=5000)
                             except Exception:
                                 pass
-                        if current_step != step_num:
-                            msg = (
-                                f"Expected to be on step {step_num} of 8, "
-                                f"but current visible step is {current_step if current_step is not None else 'unknown'}."
-                            )
-                            _log(f"ERROR: {msg}")
-                            _save_error_html(page, save_html_dir, step_num)
-                            all_errors.append(msg)
-                            break
-                    desc = step_spec.get("description", f"Step {step_num}")
-                    _log(f"--- Step {step_num} of 8: {desc} ---")
-                    # Save this step's page HTML for analysis (1 of 8, 2 of 8, ...)
-                    if save_html_dir is not None:
-                        _save_page_html(page, save_html_dir, step_num)
-                        _log(f"Saved HTML: step_{step_num:02d}_{step_num}_of_8.html")
-                    errs = fill_step(page, profile, step_spec, step_timeout_ms, pause_after_fill_seconds)
-                    if errs:
-                        for e in errs:
-                            _log(f"Step {step_num} error: {e}")
-                        all_errors.extend([f"Step {step_num} ({desc}): {e}" for e in errs])
-                    else:
-                        steps_completed = step_num
-                        _log(f"Step {step_num} done.")
-                    # Verify the form actually advanced before moving on (catches address errors, etc.)
-                    next_i = i + 1
-                    if next_i < len(steps_list) and not errs:
-                        next_spec = steps_list[next_i]
-                        next_step_num = next_spec.get("step", next_i + 1)
-                        advance_err = _verify_advanced_to_next_step(
-                            page, next_spec, step_num, save_html_dir=save_html_dir,
-                            current_step_spec=step_spec, profile=profile,
-                        )
-                        if advance_err:
-                            _log(f"  ERROR: {advance_err}")
-                            all_errors.append(advance_err)
-                            break
-                        # Mark next step as already-verified so the loop doesn't re-check the counter.
-                        advance_already_verified_for_step = next_step_num
-                    else:
-                        try:
-                            page.wait_for_timeout(500)
-                            page.wait_for_load_state("domcontentloaded", timeout=5000)
-                        except Exception:
-                            pass
 
             except PlaywrightTimeout as e:
                 _log(f"Timeout: {e}")
@@ -1043,22 +1065,31 @@ def run_filler(
                 _log(f"Exception: {e}")
                 all_errors.append(str(e))
             finally:
-                last_step_num = steps_list[-1].get("step", len(steps_list)) if steps_list else 0
-                if steps_completed == last_step_num:
-                    _log("Page 8 completed; handling agreement page checkboxes.")
-                    agreement_errors = _check_agreement_boxes(page)
-                    if agreement_errors:
-                        all_errors.extend([f"Agreement page: {e}" for e in agreement_errors])
-                    else:
-                        _log("Clicking Next on agreement page...")
-                        if _click_agreement_next_button(page):
-                            _log("Clicked Next.")
+                try:
+                    last_step_num = steps_list[-1].get("step", len(steps_list)) if steps_list else 0
+                    if steps_completed == last_step_num:
+                        _log("Page 8 completed; handling agreement page checkboxes.")
+                        agreement_errors = _check_agreement_boxes(page)
+                        if agreement_errors:
+                            all_errors.extend([f"Agreement page: {e}" for e in agreement_errors])
                         else:
-                            _log("Warning: Next button not found or not clickable.")
-                    _save_agreement_page_html(page, save_html_dir)
-                else:
-                    _log("Closing browser...")
-                    browser.close()
+                            _log("Clicking Next on agreement page...")
+                            if _click_agreement_next_button(page):
+                                _log("Clicked Next.")
+                                page.wait_for_timeout(2000)  # Let submit section appear
+                                _log("Clicking 'Submit my application'...")
+                                if _click_agreement_submit_button(page):
+                                    _log("Clicked Submit my application.")
+                                else:
+                                    _log("Warning: Submit my application button not found or not clickable.")
+                            else:
+                                _log("Warning: Next button not found or not clickable.")
+                        _save_agreement_page_html(page, save_html_dir)
+                    else:
+                        _log("Closing browser...")
+                        browser.close()
+                except Exception as e:
+                    _log(f"Warning: cleanup skipped (browser/page may already be closed): {e}")
     finally:
         last_step_num = steps_list[-1].get("step", len(steps_list)) if steps_list else 0
         if steps_completed == last_step_num:
