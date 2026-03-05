@@ -97,6 +97,19 @@ class SupabaseRepo:
 
         await asyncio.to_thread(_op)
 
+    async def get_order_by_id(self, order_id: str) -> dict[str, Any] | None:
+        def _op() -> dict[str, Any] | None:
+            resp = (
+                self._client.table("orders")
+                .select("*")
+                .eq("id", order_id)
+                .limit(1)
+                .execute()
+            )
+            return resp.data[0] if resp.data else None
+
+        return await asyncio.to_thread(_op)
+
     async def get_order_by_invoice(self, invoice_id: str) -> dict[str, Any] | None:
         def _op() -> dict[str, Any] | None:
             resp = (
@@ -123,6 +136,7 @@ class SupabaseRepo:
         await asyncio.to_thread(_op)
 
     async def mark_order_processing(self, order_id: str) -> None:
+        """Set order status to processing (e.g. when starting or retrying workflow)."""
         def _op() -> None:
             (
                 self._client.table("orders")
@@ -133,16 +147,40 @@ class SupabaseRepo:
 
         await asyncio.to_thread(_op)
 
-    async def complete_order(self, order_id: str, csv_path: str | None) -> None:
-        def _op() -> None:
+    async def complete_order(self, order_id: str, csv_path: str | None) -> bool:
+        """
+        Record one more delivered CPN and set status to completed when cpns_delivered >= cpns_paid.
+        Returns True if the order was updated, False if already fulfilled (prevents over-generation).
+        """
+        def _op() -> bool:
+            row = (
+                self._client.table("orders")
+                .select("cpns_paid, cpns_delivered, status")
+                .eq("id", order_id)
+                .limit(1)
+                .execute()
+            )
+            if not row.data:
+                return False
+            o = row.data[0]
+            cpns_paid = int(o.get("cpns_paid") or 1)
+            cpns_delivered = int(o.get("cpns_delivered") or 0)
+            if o.get("status") == "completed" or cpns_delivered >= cpns_paid:
+                return False
+            new_delivered = cpns_delivered + 1
             (
                 self._client.table("orders")
-                .update({"status": "completed", "result_csv_path": csv_path})
+                .update({
+                    "result_csv_path": csv_path,
+                    "cpns_delivered": new_delivered,
+                    "status": "completed" if new_delivered >= cpns_paid else "processing",
+                })
                 .eq("id", order_id)
                 .execute()
             )
+            return True
 
-        await asyncio.to_thread(_op)
+        return await asyncio.to_thread(_op)
 
     async def fail_order(self, order_id: str) -> None:
         def _op() -> None:

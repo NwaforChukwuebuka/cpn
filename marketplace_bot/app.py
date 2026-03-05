@@ -81,12 +81,15 @@ ROOT = Path(__file__).resolve().parent.parent
 # Step numbers for progress (1–9: first name, last name, email, phone, street, city, state, zip, dob; country=US, no middle initial)
 ORDER_STEP_TOTAL = 9
 
-def _main_menu_keyboard() -> ReplyKeyboardMarkup:
+def _main_menu_keyboard(show_retry: bool = False) -> ReplyKeyboardMarkup:
+    rows = [
+        [KeyboardButton(text="📋 Create order"), KeyboardButton(text="📦 My orders")],
+        [KeyboardButton(text="❓ Help")],
+    ]
+    if show_retry:
+        rows.insert(0, [KeyboardButton(text="🔄 Retry")])
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="📋 Create order"), KeyboardButton(text="📦 My orders")],
-            [KeyboardButton(text="❓ Help")],
-        ],
+        keyboard=rows,
         resize_keyboard=True,
         input_field_placeholder="Choose an option or type a reply below…",
     )
@@ -136,6 +139,7 @@ class BotRuntime:
             adspower_api_base=settings.adspower_api_base,
             checkpoint_store=checkpoint_store,
             on_job_done=self.on_job_done,
+            on_progress=self._on_workflow_progress,
         )
 
         self._setup_handlers()
@@ -165,6 +169,10 @@ class BotRuntime:
         self.router.message.register(
             self.handle_status,
             or_f(Command("status"), F.text == "📦 My orders", F.text == "My orders"),
+        )
+        self.router.message.register(
+            self.handle_retry,
+            or_f(Command("retry"), F.text == "🔄 Retry", F.text == "Retry"),
         )
         self.router.message.register(
             self.handle_help,
@@ -202,6 +210,7 @@ class BotRuntime:
             "/start — Show this menu\n"
             "/order — Start a new CPN order\n"
             "/status — Check your latest order\n"
+            "/retry — Retry a failed order (no new payment)\n"
             "/cancel — Cancel current order form\n\n"
             "You can also use the buttons below instead of typing commands.",
             reply_markup=_main_menu_keyboard(),
@@ -261,11 +270,82 @@ class BotRuntime:
             "failed": "❌",
         }.get(order["status"], "•")
         status_label = order["status"].replace("_", " ").title()
-        await message.answer(
+        is_failed = order["status"] == "failed"
+        cpns_paid = int(order.get("cpns_paid") or 1)
+        cpns_delivered = int(order.get("cpns_delivered") or 0)
+        body = (
             f"📦 <b>Latest order</b>\n\n"
             f"{status_emoji} <b>Status:</b> {status_label}\n"
-            f"🆔 <b>Order ID:</b> <code>{order['id']}</code>\n\n"
-            f"Need another? Use <b>Create order</b>.",
+            f"🆔 <b>Order ID:</b> <code>{order['id']}</code>\n"
+        )
+        if cpns_paid > 1:
+            body += f"\n📄 CPNs: {cpns_delivered}/{cpns_paid} delivered.\n"
+        if is_failed:
+            body += "\nYou can retry this order without paying again. Use <b>Retry</b> below."
+        else:
+            body += "\n\nNeed another? Use <b>Create order</b>."
+        await message.answer(
+            body,
+            reply_markup=_main_menu_keyboard(show_retry=is_failed),
+            parse_mode="HTML",
+        )
+
+    async def handle_retry(self, message: Message, state: FSMContext) -> None:
+        """Retry a failed paid order without requiring a new payment."""
+        await state.clear()
+        user = await self.repo.get_user_by_telegram_id(message.from_user.id)  # type: ignore[arg-type]
+        if not user:
+            await message.answer(
+                "You don't have any orders. Use <b>Create order</b> to place one.",
+                reply_markup=_main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+        order = await self.repo.get_latest_order_for_user(user["id"])
+        if not order:
+            await message.answer(
+                "You don't have any orders. Use <b>Create order</b> to place one.",
+                reply_markup=_main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+        if order["status"] != "failed":
+            await message.answer(
+                "Only failed orders can be retried. Your latest order is not in a failed state.\n\n"
+                "Use <b>My orders</b> to check status.",
+                reply_markup=_main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+        # Failed orders have already been paid (workflow ran and then failed)
+        order_id = order["id"]
+        cpns_paid = int(order.get("cpns_paid") or 1)
+        cpns_delivered = int(order.get("cpns_delivered") or 0)
+        if cpns_delivered >= cpns_paid:
+            await message.answer(
+                "This order is already fulfilled. Use <b>Create order</b> for a new order.",
+                reply_markup=_main_menu_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+        await self.repo.mark_order_processing(order_id)
+        workflow_state = workflow_state_from_profile(
+            order["profile_snapshot"], self.settings.workflow_state
+        )
+        telegram_id = message.from_user.id
+        request_obj = WorkflowJobRequest(
+            user_id=str(order["user_id"]),
+            state=workflow_state,
+            stop_after=self.settings.workflow_stop_after,
+            template=order["profile_snapshot"],
+            metadata={"order_id": order_id, "telegram_id": telegram_id},
+        )
+        job_id = await self.workflow_queue.submit_job(request_obj)
+        await self.repo.create_workflow_job(order_id, job_id)
+        await message.answer(
+            "🔄 <b>Retry started</b>\n\n"
+            "We're processing your order again. You'll see progress updates here. "
+            "No additional payment is required.",
             reply_markup=_main_menu_keyboard(),
             parse_mode="HTML",
         )
@@ -526,6 +606,16 @@ class BotRuntime:
             parse_mode="HTML",
         )
 
+    async def _on_workflow_progress(self, record: WorkflowJobRecord, stage: str) -> None:
+        """Send a progress update to the user so they see the workflow is running."""
+        telegram_id = record.request.metadata.get("telegram_id")
+        if telegram_id is None:
+            return
+        try:
+            await self.bot.send_message(int(telegram_id), stage, parse_mode="HTML")
+        except Exception as e:
+            LOG.warning("Could not send progress to user %s: %s", telegram_id, e)
+
     async def on_job_done(self, record: WorkflowJobRecord) -> None:
         order_id = str(record.request.metadata.get("order_id", ""))
         telegram_id = record.request.metadata.get("telegram_id")
@@ -547,9 +637,9 @@ class BotRuntime:
             profile = record.result["profile"]
             csv_bytes = build_profile_csv_bytes(profile)
             file_path = persist_csv(order_id, csv_bytes, ROOT / "data" / "workflow_csv")
-            await self.repo.complete_order(order_id, str(file_path))
-
-            if telegram_id is not None:
+            # Only complete if order still owes CPNs (prevents over-generation)
+            updated = await self.repo.complete_order(order_id, str(file_path))
+            if updated and telegram_id is not None:
                 doc = BufferedInputFile(csv_bytes, filename=f"cpn_{order_id}.csv")
                 await self.bot.send_message(
                     int(telegram_id),
@@ -562,7 +652,7 @@ class BotRuntime:
             if telegram_id is not None:
                 await self.bot.send_message(
                     int(telegram_id),
-                    f"❌ <b>Workflow failed</b>\n\nWe couldn’t complete your order.\nError: {record.error or 'unknown'}\n\nUse <b>My orders</b> to check status or create a new order.",
+                    f"❌ <b>Something went wrong</b>\n\nWe couldn’t complete your order.\n\nYou can retry from <b>My orders</b> without paying again.",
                     parse_mode="HTML",
                 )
 
@@ -619,6 +709,16 @@ class BotRuntime:
         )
         job_id = await self.workflow_queue.submit_job(request_obj)
         await self.repo.create_workflow_job(order["id"], job_id)
+        if telegram_id is not None:
+            try:
+                await self.bot.send_message(
+                    int(telegram_id),
+                    "✅ <b>Payment received.</b> We've started processing your order. "
+                    "You'll see progress updates below so you know it's working.",
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                LOG.warning("Could not send payment-received message to user %s: %s", telegram_id, e)
         return web.Response(status=200, text="ok")
 
     async def _run_polling(self) -> None:

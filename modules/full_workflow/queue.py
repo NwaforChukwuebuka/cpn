@@ -154,6 +154,7 @@ class FullWorkflowQueueService:
         resume_from_checkpoint: bool = True,
         profile_base_slots: list[int] | None = None,
         on_job_done: Callable[[WorkflowJobRecord], Awaitable[None] | None] | None = None,
+        on_progress: Callable[[WorkflowJobRecord, str], Awaitable[None]] | None = None,
     ) -> None:
         self._template = dict(template)
         self._capital_one_steps = dict(capital_one_steps)
@@ -165,6 +166,7 @@ class FullWorkflowQueueService:
         self._checkpoint_store = checkpoint_store
         self._resume_from_checkpoint = resume_from_checkpoint
         self._on_job_done = on_job_done
+        self._on_progress = on_progress
 
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._records: dict[str, WorkflowJobRecord] = {}
@@ -246,6 +248,13 @@ class FullWorkflowQueueService:
         record.status = "running"
         record.started_at = time.time()
 
+        # Notify user that processing has started (first progress message).
+        if self._on_progress is not None:
+            try:
+                await self._on_progress(record, "⏳ Processing your order...")
+            except Exception as exc:
+                print(f"[WFQ][job={record.job_id}] on_progress (start) failed: {type(exc).__name__}: {exc}")
+
         leased_slot = False
         profile_base_index = record.request.profile_base_index
         try:
@@ -261,6 +270,13 @@ class FullWorkflowQueueService:
                     flush=True,
                 )
 
+            async def _progress(stage: str) -> None:
+                if self._on_progress is not None:
+                    try:
+                        await self._on_progress(record, stage)
+                    except Exception as exc:
+                        print(f"[WFQ][job={record.job_id}] on_progress failed: {type(exc).__name__}: {exc}")
+
             result = await run_full_workflow_resilient_async(
                 job_id=record.job_id,
                 state=record.request.state,
@@ -274,6 +290,7 @@ class FullWorkflowQueueService:
                 steve_morse_delay_seconds=record.request.steve_morse_delay_seconds,
                 steve_morse_headless=True,
                 log_callback=_log,
+                progress_callback=_progress,
                 retry_attempts=self._retry_attempts,
                 retry_backoff_seconds=self._retry_backoff_seconds,
                 adspower_step_gate=self._adspower_gate,

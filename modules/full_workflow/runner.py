@@ -109,6 +109,14 @@ async def _run_step_with_retries(
     return False, {"ok": False, "error": f"{step_name} failed"}, f"{step_name} failed"
 
 
+# User-facing progress labels (for non-technical users)
+PROGRESS_GETTING_CPN = "⏳ Getting your CPN..."
+PROGRESS_VALIDATING_CPN = "⏳ Validating your CPN..."
+PROGRESS_BUILDING_PROFILE = "⏳ Building your profile..."
+PROGRESS_APPLICATION_STEP_1 = "⏳ Completing your application (step 1 of 2)..."
+PROGRESS_APPLICATION_STEP_2 = "⏳ Completing your application (step 2 of 2)..."
+
+
 async def run_full_workflow_resilient_async(
     *,
     job_id: str | None,
@@ -123,6 +131,7 @@ async def run_full_workflow_resilient_async(
     steve_morse_delay_seconds: float = 3.0,
     steve_morse_headless: bool = True,
     log_callback: Callable[[str], None] | None = None,
+    progress_callback: Callable[[str], Awaitable[None]] | None = None,
     retry_attempts: int = 3,
     retry_backoff_seconds: tuple[float, ...] = (5.0, 15.0, 45.0),
     adspower_step_gate: AdspowerStepGate | None = None,
@@ -215,9 +224,17 @@ async def run_full_workflow_resilient_async(
         result["elapsed_sec"] = _elapsed(start_wall)
         return result
 
+    async def _notify(stage: str) -> None:
+        if progress_callback is not None:
+            try:
+                await progress_callback(stage)
+            except Exception:
+                pass
+
     # --- Step 1: Steve Morse ---
     if not (last_completed and _STEP_INDEX[last_completed] >= _STEP_INDEX["stevemorse"]):
         _log("Step 1/5: Steve Morse (five-digit decoder)...")
+        await _notify(PROGRESS_GETTING_CPN)
 
         async def _run_steve() -> dict[str, Any]:
             return await async_run_five_digit_decoder(
@@ -255,6 +272,7 @@ async def run_full_workflow_resilient_async(
     # --- Step 2: SSN Validator ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["ssn"]):
         _log("Step 2/5: SSN Validator...")
+        await _notify(PROGRESS_VALIDATING_CPN)
         partial_cpn = result.get("partial_cpn") or {}
         ssn_profile_id = get_profile_for_index(profile_base_index)
 
@@ -291,6 +309,7 @@ async def run_full_workflow_resilient_async(
     # --- Step 3: Profile Builder ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["profile"]):
         _log("Step 3/5: Profile Builder...")
+        await _notify(PROGRESS_BUILDING_PROFILE)
         full_cpn = result.get("ssn_result")
         profile, build_errors = await build_profile_async(
             template,
@@ -317,6 +336,7 @@ async def run_full_workflow_resilient_async(
     # --- Step 4: Capital One ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["capital_one"]):
         _log("Step 4/5: Capital One filler...")
+        await _notify(PROGRESS_APPLICATION_STEP_1)
         cap_profile_id = get_profile_for_index(profile_base_index + 1)
         profile = result.get("profile")
 
@@ -356,6 +376,7 @@ async def run_full_workflow_resilient_async(
     # --- Step 5: First Premier ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["first_premier"]):
         _log("Step 5/5: First Premier filler...")
+        await _notify(PROGRESS_APPLICATION_STEP_2)
         fp_profile_id = get_profile_for_index(profile_base_index + 2)
         profile = result.get("profile")
 
@@ -425,6 +446,7 @@ async def run_full_workflow_async(
         steve_morse_delay_seconds=steve_morse_delay_seconds,
         steve_morse_headless=steve_morse_headless,
         log_callback=log_callback,
+        progress_callback=None,
         retry_attempts=1,
         retry_backoff_seconds=(),
         adspower_step_gate=None,
