@@ -17,7 +17,7 @@ The Telegram app lives in `marketplace_bot/` and integrates:
 3. Install dependencies: `pip install -r requirements.txt`.
 4. Start the bot: `python -m marketplace_bot.app`.
 
-For BTCPay webhooks from the internet, run ngrok in another terminal: `python start_ngrok.py` (set `NGROK_AUTHTOKEN` and optionally `NGROK_URL` in `.env`), then set `WEBHOOK_PUBLIC_BASE_URL` to the ngrok URL (e.g. `https://your-subdomain.ngrok.app`).
+**BTCPay webhooks (public URL):** Either set `WEBHOOK_PUBLIC_BASE_URL` in `.env` to your public URL, or set `USE_NGROK=true` and `NGROK_AUTHTOKEN` (and optionally `NGROK_URL` for a reserved domain). With `USE_NGROK=true`, the bot starts ngrok automatically and uses the tunnel URL for webhooks—no separate terminal needed.
 
 The bot starts Telegram polling and an HTTP webhook listener on `WEBHOOK_HOST:WEBHOOK_PORT`.
 

@@ -5,6 +5,11 @@ import hashlib
 import hmac
 import json
 import logging
+import os
+import subprocess
+import time
+import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,7 +32,7 @@ from aiogram.types import (
 from dotenv import load_dotenv
 
 from marketplace_bot.btcpay import BTCPayClient, invoice_is_paid
-from marketplace_bot.config import Settings, load_settings
+from marketplace_bot.config import Settings, load_settings, _use_ngrok
 from marketplace_bot.csv_export import build_profile_csv_bytes, persist_csv
 from marketplace_bot.db import SupabaseRepo
 from marketplace_bot.profiles import merge_profile, validate_profile_input, workflow_state_from_profile
@@ -673,6 +678,49 @@ def _epoch_to_iso(value: float | None) -> str | None:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
 
 
+def _start_ngrok(port: int) -> tuple[subprocess.Popen | None, str | None]:
+    """Start ngrok tunneling to the given port; return (process, public_url)."""
+    token = (os.getenv("NGROK_AUTHTOKEN") or "").strip()
+    if not token or token == "paste_your_authtoken_here":
+        LOG.warning("USE_NGROK is set but NGROK_AUTHTOKEN is missing or placeholder; skipping ngrok")
+        return None, None
+    ngrok_exe = os.getenv("NGROK_PATH") or (r"C:\Program Files\ngrok\ngrok.exe" if os.name == "nt" else "ngrok")
+    cmd = [ngrok_exe, "http", str(port)]
+    reserved = (os.getenv("NGROK_URL") or "").strip()
+    if reserved:
+        cmd.insert(2, f"--url={reserved}")
+    env = os.environ.copy()
+    env["NGROK_AUTHTOKEN"] = token
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except FileNotFoundError:
+        LOG.warning("ngrok executable not found at %s; set NGROK_PATH in .env", ngrok_exe)
+        return None, None
+    # Poll local ngrok API for tunnel URL (up to 30s)
+    api_url = "http://127.0.0.1:4040/api/tunnels"
+    for _ in range(60):
+        time.sleep(0.5)
+        try:
+            with urllib.request.urlopen(api_url, timeout=2) as r:
+                data = json.loads(r.read().decode())
+            tunnels = data.get("tunnels") or []
+            if tunnels and isinstance(tunnels[0].get("public_url"), str):
+                url = (tunnels[0]["public_url"] or "").rstrip("/")
+                if url:
+                    LOG.info("ngrok started: %s → localhost:%s", url, port)
+                    return proc, url
+        except Exception:
+            pass
+    LOG.warning("ngrok started but tunnel URL not available within 30s")
+    proc.terminate()
+    return None, None
+
+
 async def _main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     # Treat Telegram network/connection errors as WARNING (we retry automatically)
@@ -681,8 +729,23 @@ async def _main() -> None:
         _log.addFilter(_NetworkErrorFilter())
     load_dotenv()
     settings = load_settings()
-    runtime = BotRuntime(settings)
-    await runtime.run()
+    ngrok_proc = None
+    if settings.payment_enabled and _use_ngrok():
+        ngrok_proc, public_url = _start_ngrok(settings.webhook_port)
+        if public_url:
+            settings = replace(settings, webhook_public_base_url=public_url)
+            LOG.info("BTCPay webhook URL: %s/webhooks/btcpay", public_url)
+        elif ngrok_proc:
+            ngrok_proc.terminate()
+            ngrok_proc = None
+    try:
+        runtime = BotRuntime(settings)
+        await runtime.run()
+    finally:
+        if ngrok_proc is not None:
+            ngrok_proc.terminate()
+            ngrok_proc.wait(timeout=5)
+            LOG.info("ngrok stopped")
 
 
 if __name__ == "__main__":

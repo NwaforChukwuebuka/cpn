@@ -35,8 +35,20 @@ def _payment_enabled() -> bool:
     return os.getenv("PAYMENT_ENABLED", "true").strip().lower() in ("true", "1", "yes")
 
 
+def _use_ngrok() -> bool:
+    return os.getenv("USE_NGROK", "").strip().lower() in ("true", "1", "yes")
+
+
 def load_settings() -> Settings:
     pay = _payment_enabled()
+    use_ngrok = _use_ngrok()
+    # When USE_NGROK=true, bot starts ngrok and sets this at runtime; no env required
+    if pay and use_ngrok:
+        webhook_public_base_url = (os.getenv("WEBHOOK_PUBLIC_BASE_URL") or "").strip().rstrip("/") or "https://localhost"
+    elif pay:
+        webhook_public_base_url = _required("WEBHOOK_PUBLIC_BASE_URL").rstrip("/")
+    else:
+        webhook_public_base_url = "https://localhost"
     return Settings(
         telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
         supabase_url=_required("SUPABASE_URL"),
@@ -48,7 +60,7 @@ def load_settings() -> Settings:
         btcpay_webhook_secret=os.getenv("BTCPAY_WEBHOOK_SECRET", "").strip() or None,
         webhook_host=os.getenv("WEBHOOK_HOST", "0.0.0.0"),
         webhook_port=int(os.getenv("WEBHOOK_PORT", "8080")),
-        webhook_public_base_url=(_required("WEBHOOK_PUBLIC_BASE_URL").rstrip("/") if pay else "https://localhost"),
+        webhook_public_base_url=webhook_public_base_url,
         order_amount_usd=float(os.getenv("ORDER_AMOUNT_USD", "150")),
         workflow_state=os.getenv("WORKFLOW_STATE", "Florida"),
         workflow_stop_after=os.getenv("WORKFLOW_STOP_AFTER", "first_premier"),
