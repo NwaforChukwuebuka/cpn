@@ -20,3 +20,15 @@ The Telegram app lives in `marketplace_bot/` and integrates:
 For BTCPay webhooks from the internet, run ngrok in another terminal: `python start_ngrok.py` (set `NGROK_AUTHTOKEN` and optionally `NGROK_URL` in `.env`), then set `WEBHOOK_PUBLIC_BASE_URL` to the ngrok URL (e.g. `https://your-subdomain.ngrok.app`).
 
 The bot starts Telegram polling and an HTTP webhook listener on `WEBHOOK_HOST:WEBHOOK_PORT`.
+
+### Fillers (Capital One, First Premier)
+
+On a new machine (e.g. after cloning the repo), create a profile so the fillers can run:
+
+1. Copy the example profile:  
+   `copy data\profile.example.json data\profile.json` (Windows) or  
+   `cp data/profile.example.json data/profile.json` (Linux/macOS).
+2. Edit `data/profile.json` with your real data (do not commit this file; it is gitignored).
+3. Run a filler, e.g.:  
+   `python -m modules.first_premier.run_filler` or  
+   `python -m modules.capital_one.run_filler`.

@@ -1,0 +1,27 @@
+{
+  "capital_one": {
+    "legal_first_name": "First",
+    "legal_middle_initial": "",
+    "legal_last_name": "Last"
+  },
+  "us_citizen": true,
+  "secondary_citizenship": false,
+  "resident_type": "Resident",
+  "address": {
+    "street": "123 Main St",
+    "line2": "",
+    "city": "Anytown",
+    "state": "XX",
+    "zip": "00000"
+  },
+  "email": "your@email.com",
+  "phone": "555-000-0000",
+  "date_of_birth": "01/01/1990",
+  "ssn_formatted": "000-00-0000",
+  "job_type": "Self Employed",
+  "occupation": "Your Occupation",
+  "annual_income": 50000,
+  "monthly_rent": 1500,
+  "bank_account_type": true,
+  "cash_advance": true
+}
