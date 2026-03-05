@@ -11,15 +11,6 @@ No global state; log and HTML paths are per-call. Optional log_callback for per-
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# When run as script (e.g. python modules/capital_one/run_filler.py), ensure project root is on path
-if __name__ == "__main__":
-    _root = Path(__file__).resolve().parent.parent.parent
-    if str(_root) not in sys.path:
-        sys.path.insert(0, str(_root))
-
 import argparse
 import asyncio
 import json
@@ -41,9 +32,14 @@ try:
 except ImportError:
     requests = None  # type: ignore[misc, assignment]
 
+# Ensure project root is on path when run as script (e.g. python modules/capital_one/run_filler.py)
+_project_root = Path(__file__).resolve().parent.parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 from modules.adspower_profiles import DEFAULT_ADSPOWER_PROFILE
 
-DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+DEFAULT_PROJECT_ROOT = _project_root
 DEFAULT_PROFILE_PATH = DEFAULT_PROJECT_ROOT / "data" / "profile.json"
 DEFAULT_STEPS_CONFIG = Path(__file__).resolve().parent / "steps.json"
 DEFAULT_LOG_PATH = DEFAULT_PROJECT_ROOT / "data" / "tri_merge_log.json"
@@ -188,17 +184,6 @@ def _get_step_scope(page, step_num: int | None = None):
     return section if section is not None else page
 
 
-def _get_scope_id_for_log(scope, page) -> str:
-    """Return a string describing the active scope (section id or page) for debug logging."""
-    if scope is page:
-        return "page (no step section)"
-    try:
-        aid = scope.first.get_attribute("id")
-        return aid if aid else "(no id)"
-    except Exception as e:
-        return f"error: {e}"
-
-
 def fill_step(
     page,
     profile: dict,
@@ -214,7 +199,6 @@ def fill_step(
     # Track filled by (profile_key, field_id) so the same value can fill multiple fields (e.g. SSN + Confirm SSN).
     filled: set[tuple[str, str]] = set()
     scope = _get_step_scope(page, step_spec.get("step"))
-    _log(f"  [DEBUG] Active step section: {_get_scope_id_for_log(scope, page)}")
 
     for field_spec in step_spec.get("fields", []):
         profile_key = field_spec.get("profile_key")
@@ -520,7 +504,6 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
     _log("  Refilling full address before retry...")
     refilled_any = False
     scope = _get_step_scope(page, 3)
-    _log(f"  [DEBUG] Active step section (refill address): {_get_scope_id_for_log(scope, page)}")
 
     # Mapping from profile-key suffix → Capital One's alternative ID suffix
     _ALT_ID_MAP = {
@@ -666,7 +649,6 @@ def _click_continue_button(page) -> bool:
     """Click the Continue button on whichever step is currently visible. Returns True if clicked."""
     current_step = _get_visible_step_num(page)
     scope = _get_step_scope(page, current_step)
-    _log(f"  [DEBUG] Active step section (Continue): {_get_scope_id_for_log(scope, page)}")
     patterns = []
     search_roots = [scope, page] if scope is not page else [scope]
     for root in search_roots:
