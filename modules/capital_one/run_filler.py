@@ -705,15 +705,92 @@ def _get_visible_step_num(page) -> int | None:
     return None
 
 
+def _get_active_step_num(page) -> int | None:
+    """
+    Return active step from the visible stepper section id first (source of truth),
+    then fall back to visible step-counter text.
+    """
+    try:
+        sections = page.locator("section[id^='cdk-stepper-web-shell0-content-']:not(.hidden)")
+        count = _count(sections)
+        for i in range(count):
+            sec = sections.nth(i)
+            try:
+                if not sec.is_visible():
+                    continue
+                sec_id = (sec.get_attribute("id") or "").strip()
+                m = re.search(r"cdk-stepper-web-shell0-content-(\d+)$", sec_id)
+                if m:
+                    return int(m.group(1)) + 1
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return _get_visible_step_num(page)
+
+
 def _wait_for_expected_step(page, expected_step_num: int, timeout_ms: int = 10000) -> bool:
     """Wait until the visible step counter matches expected step number."""
     ticks = max(1, timeout_ms // 500)
     for _ in range(ticks):
-        current = _get_visible_step_num(page)
+        current = _get_active_step_num(page)
         if current == expected_step_num:
             return True
         page.wait_for_timeout(500)
-    return _get_visible_step_num(page) == expected_step_num
+    return _get_active_step_num(page) == expected_step_num
+
+
+def _step_markers_visible(page, step_spec: dict | None, step_num: int) -> bool:
+    """
+    Best-effort step detector: returns True when at least one marker for step_spec
+    is visible in the expected step scope.
+    """
+    if not step_spec:
+        return False
+
+    scope = _get_step_scope(page, step_num)
+    selectors: list[str] = []
+
+    raw_check = step_spec.get("advance_check_selector")
+    if isinstance(raw_check, str) and raw_check.strip():
+        selectors.append(raw_check.strip())
+    elif isinstance(raw_check, list):
+        selectors.extend([str(s).strip() for s in raw_check if str(s).strip()])
+
+    for f in step_spec.get("fields", []):
+        sel = f.get("selector")
+        if sel and sel not in selectors:
+            selectors.append(sel)
+        for s in (f.get("selectors") or []):
+            if s and s not in selectors:
+                selectors.append(s)
+
+    for sel in selectors:
+        try:
+            loc = scope.locator(sel)
+            if _count(loc) > 0 and loc.first.is_visible():
+                return True
+        except Exception:
+            continue
+
+    for f in step_spec.get("fields", []):
+        label = (f.get("label") or "").strip()
+        if not label:
+            continue
+        try:
+            label_loc = scope.get_by_label(label, exact=False)
+            if _count(label_loc) > 0 and label_loc.first.is_visible():
+                return True
+        except Exception:
+            pass
+        try:
+            text_loc = scope.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
+            if _count(text_loc) > 0 and text_loc.first.is_visible():
+                return True
+        except Exception:
+            pass
+
+    return False
 
 
 def _verify_advanced_to_next_step(
@@ -762,11 +839,12 @@ def _verify_advanced_to_next_step(
 
     MAX_RETRIES = 20
     RETRY_INTERVAL_MS = 5000
+    expected_next_step_num = current_step_num + 1
 
     def _is_advanced() -> bool:
-        if _get_visible_step_num(page) == current_step_num + 1:
+        if _get_active_step_num(page) == expected_next_step_num:
             return True
-        next_scope = _get_visible_step_section(page, step_num=current_step_num + 1)
+        next_scope = _get_visible_step_section(page, step_num=expected_next_step_num)
         if next_scope is None:
             return False
         for sel in check_selectors:
@@ -833,6 +911,29 @@ def _verify_advanced_to_next_step(
                 _log("  Form advanced to next step.")
             return None
 
+        detected_step = _get_active_step_num(page)
+        if detected_step is not None and detected_step != current_step_num:
+            # Recovery behavior: if the app moved to another step, hand control back
+            # to the main loop so it can fill whichever page is currently active.
+            if detected_step >= expected_next_step_num:
+                _log(
+                    f"  Step detector: currently on step {detected_step}; "
+                    f"treating step {current_step_num} as advanced."
+                )
+            else:
+                _log(
+                    f"  Step detector shifted to step {detected_step} while validating "
+                    f"step {current_step_num}; handing control back to active-step recovery."
+                )
+            return None
+
+        if _step_markers_visible(page, next_step_spec, expected_next_step_num) and not _step_markers_visible(page, current_step_spec, current_step_num):
+            _log(
+                f"  Step markers indicate step {expected_next_step_num} is visible and "
+                f"step {current_step_num} is not; treating as advanced."
+            )
+            return None
+
         hard_err = _check_hard_error()
         if hard_err:
             _log(f"  Hard error detected: {hard_err}")
@@ -846,11 +947,17 @@ def _verify_advanced_to_next_step(
 
         # Re-apply this step's selections/inputs before clicking Continue again (do not just retry Continue).
         if current_step_spec and profile:
-            if current_step_num == 3:
-                _refill_address_on_step3(page, current_step_spec, profile)
+            if _step_markers_visible(page, current_step_spec, current_step_num):
+                if current_step_num == 3:
+                    _refill_address_on_step3(page, current_step_spec, profile)
+                else:
+                    _log("  Re-filling step fields before retry...")
+                    fill_step(page, profile, current_step_spec, step_timeout_ms, skip_continue=True)
             else:
-                _log("  Re-filling step fields before retry...")
-                fill_step(page, profile, current_step_spec, step_timeout_ms, skip_continue=True)
+                _log(
+                    f"  Step {current_step_num} markers not visible; skipping re-fill "
+                    "to avoid filling the wrong page."
+                )
 
         if _click_continue_button(page):
             _log("  Clicked Continue (retry).")
@@ -1057,91 +1164,111 @@ def _run_filler_core(
                         except Exception:
                             pass
 
-                    advance_already_verified_for_step: int | None = None  # set when _verify_advanced_to_next_step confirmed a step
+                    total_steps = len(steps_list)
+                    next_step_to_process = 1
+                    max_fill_attempts_per_page = 3
 
-                    for i, step_spec in enumerate(steps_list):
-                        step_num = step_spec.get("step", i + 1)
-                        if stop_after_step is not None and step_num > stop_after_step:
+                    while 1 <= next_step_to_process <= total_steps:
+                        if stop_after_step is not None and next_step_to_process > stop_after_step:
                             _log(f"Stopping after step (limit {stop_after_step}).")
                             break
-                        # Skip re-check if the previous advance verification already confirmed we're on this step.
-                        if advance_already_verified_for_step == step_num:
-                            _log(f"  Advance to step {step_num} already verified; skipping counter re-check.")
-                        elif not _wait_for_expected_step(page, step_num, timeout_ms=15000):
-                            current_step = _get_visible_step_num(page)
-                            # Step 1 only: if counter is unknown but step-1 form is visible, assume we're on step 1
-                            if step_num == 1 and current_step is None:
-                                try:
-                                    step1_visible = False
-                                    # Try selectors from step config first
-                                    for f in step_spec.get("fields", []):
-                                        sel = f.get("selector")
-                                        if not sel:
-                                            continue
-                                        loc = page.locator(sel)
-                                        if _count(loc) > 0 and loc.first.is_visible():
-                                            step1_visible = True
-                                            break
-                                    # Fallback by labels if selector check did not succeed
-                                    if not step1_visible:
-                                        for f in step_spec.get("fields", []):
-                                            lbl = f.get("label")
-                                            if not lbl:
-                                                continue
-                                            loc = page.get_by_label(lbl, exact=False)
-                                            if _count(loc) > 0 and loc.first.is_visible():
-                                                step1_visible = True
-                                                break
-                                    if step1_visible:
-                                        _log("  Step counter not found; step 1 form is visible, proceeding.")
-                                        current_step = 1
-                                except Exception:
-                                    pass
-                            if current_step != step_num:
-                                msg = (
-                                    f"Expected to be on step {step_num} of 8, "
-                                    f"but current visible step is {current_step if current_step is not None else 'unknown'}."
-                                )
-                                _log(f"ERROR: {msg}")
-                                _save_error_html(page, save_html_dir, step_num)
-                                all_errors.append(msg)
-                                break
+
+                        detected_step = _get_active_step_num(page)
+                        if detected_step is None:
+                            detected_step = next_step_to_process
+                            _log(
+                                f"  Active step is unknown; defaulting to step {detected_step} "
+                                "for recovery."
+                            )
+                        elif detected_step < 1 or detected_step > total_steps:
+                            msg = (
+                                f"Detected invalid active step {detected_step} "
+                                f"(expected range 1..{total_steps})."
+                            )
+                            _log(f"ERROR: {msg}")
+                            _save_error_html(page, save_html_dir, next_step_to_process)
+                            all_errors.append(msg)
+                            break
+
+                        if detected_step != next_step_to_process:
+                            _log(
+                                f"  Recovery: expected step {next_step_to_process}, "
+                                f"but active page is step {detected_step}. "
+                                "Filling the active page."
+                            )
+                        next_step_to_process = detected_step
+                        step_idx = next_step_to_process - 1
+                        step_spec = steps_list[step_idx]
+                        step_num = step_spec.get("step", next_step_to_process)
                         desc = step_spec.get("description", f"Step {step_num}")
                         _log(f"--- Step {step_num} of 8: {desc} ---")
-                        # Save this step's page HTML for analysis (1 of 8, 2 of 8, ...)
+
                         if save_html_dir is not None:
                             _save_page_html(page, save_html_dir, step_num)
                             _log(f"Saved HTML: step_{step_num:02d}_{step_num}_of_8.html")
-                        errs = fill_step(page, profile, step_spec, step_timeout_ms, pause_after_fill_seconds)
-                        if errs:
-                            for e in errs:
-                                _log(f"Step {step_num} error: {e}")
-                            all_errors.extend([f"Step {step_num} ({desc}): {e}" for e in errs])
+
+                        page_accepted = False
+                        for attempt_no in range(1, max_fill_attempts_per_page + 1):
+                            errs = fill_step(page, profile, step_spec, step_timeout_ms, pause_after_fill_seconds)
+                            if errs:
+                                for e in errs:
+                                    _log(f"Step {step_num} error: {e}")
+                                if attempt_no >= max_fill_attempts_per_page:
+                                    all_errors.extend(
+                                        [f"Step {step_num} ({desc}) not accepted after {attempt_no} fill attempt(s): {e}" for e in errs]
+                                    )
+                                    break
+                                _log(
+                                    f"  Step {step_num} not accepted due field errors; "
+                                    f"retrying fill ({attempt_no}/{max_fill_attempts_per_page})..."
+                                )
+                                page.wait_for_timeout(800)
+                                continue
+
+                            if step_idx + 1 < total_steps:
+                                next_spec = steps_list[step_idx + 1]
+                                advance_err = _verify_advanced_to_next_step(
+                                    page, next_spec, step_num, save_html_dir=save_html_dir,
+                                    current_step_spec=step_spec, profile=profile,
+                                    step_timeout_ms=step_timeout_ms,
+                                )
+                                if advance_err:
+                                    if attempt_no >= max_fill_attempts_per_page:
+                                        _log(f"  ERROR: {advance_err}")
+                                        all_errors.append(
+                                            f"Step {step_num} ({desc}) not accepted after {attempt_no} submit attempt(s): {advance_err}"
+                                        )
+                                        break
+                                    _log(
+                                        f"  Step {step_num} not accepted; retrying submit "
+                                        f"({attempt_no}/{max_fill_attempts_per_page})..."
+                                    )
+                                    page.wait_for_timeout(800)
+                                    continue
+
+                            steps_completed = max(steps_completed, step_num)
+                            _log(f"Step {step_num} accepted.")
+                            page_accepted = True
+                            break
+
+                        if not page_accepted:
+                            break
+
+                        if step_idx + 1 >= total_steps:
+                            break
+
+                        # Move forward, but always prefer the real active step if detectable.
+                        active_after_accept = _get_active_step_num(page)
+                        if active_after_accept is not None:
+                            next_step_to_process = max(step_num + 1, active_after_accept)
                         else:
-                            steps_completed = step_num
-                            _log(f"Step {step_num} done.")
-                        # Verify the form actually advanced before moving on (catches address errors, etc.)
-                        next_i = i + 1
-                        if next_i < len(steps_list) and not errs:
-                            next_spec = steps_list[next_i]
-                            next_step_num = next_spec.get("step", next_i + 1)
-                            advance_err = _verify_advanced_to_next_step(
-                                page, next_spec, step_num, save_html_dir=save_html_dir,
-                                current_step_spec=step_spec, profile=profile,
-                                step_timeout_ms=step_timeout_ms,
-                            )
-                            if advance_err:
-                                _log(f"  ERROR: {advance_err}")
-                                all_errors.append(advance_err)
-                                break
-                            # Mark next step as already-verified so the loop doesn't re-check the counter.
-                            advance_already_verified_for_step = next_step_num
-                        else:
-                            try:
-                                page.wait_for_timeout(500)
-                                page.wait_for_load_state("domcontentloaded", timeout=5000)
-                            except Exception:
-                                pass
+                            next_step_to_process = step_num + 1
+
+                        try:
+                            page.wait_for_timeout(500)
+                            page.wait_for_load_state("domcontentloaded", timeout=5000)
+                        except Exception:
+                            pass
 
             except PlaywrightTimeout as e:
                 _log(f"Timeout: {e}")
