@@ -190,10 +190,12 @@ def fill_step(
     step_spec: dict,
     step_timeout_ms: int,
     pause_after_fill_seconds: float = 0,
+    skip_continue: bool = False,
 ) -> list[str]:
     """
     Fill one step: for each field, resolve value and try label then placeholder;
-    then click Continue. Returns list of errors (empty if ok).
+    then click Continue (unless skip_continue=True). Returns list of errors (empty if ok).
+    When skip_continue is True, used to re-apply selections/inputs before retrying Continue.
     """
     errors: list[str] = []
     # Track filled by (profile_key, field_id) so the same value can fill multiple fields (e.g. SSN + Confirm SSN).
@@ -354,6 +356,9 @@ def fill_step(
     # Do not continue if field errors exist on this step.
     if errors:
         _log("  Step has field errors; NOT clicking Continue.")
+        return errors
+
+    if skip_continue:
         return errors
 
     # Pause so you can view what was picked before Continue is clicked
@@ -718,6 +723,7 @@ def _verify_advanced_to_next_step(
     save_html_dir: Path | None = None,
     current_step_spec: dict | None = None,
     profile: dict | None = None,
+    step_timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS,
 ) -> str | None:
     """
     After clicking Continue, actively poll to determine whether:
@@ -836,10 +842,15 @@ def _verify_advanced_to_next_step(
         if attempt >= MAX_RETRIES:
             break
 
-        _log(f"  Form did not advance; retrying Continue ({attempt + 1}/{MAX_RETRIES})...")
+        _log(f"  Form did not advance; reselecting options for this page, then retrying Continue ({attempt + 1}/{MAX_RETRIES})...")
 
-        if current_step_num == 3 and current_step_spec and profile:
-            _refill_address_on_step3(page, current_step_spec, profile)
+        # Re-apply this step's selections/inputs before clicking Continue again (do not just retry Continue).
+        if current_step_spec and profile:
+            if current_step_num == 3:
+                _refill_address_on_step3(page, current_step_spec, profile)
+            else:
+                _log("  Re-filling step fields before retry...")
+                fill_step(page, profile, current_step_spec, step_timeout_ms, skip_continue=True)
 
         if _click_continue_button(page):
             _log("  Clicked Continue (retry).")
@@ -1117,6 +1128,7 @@ def _run_filler_core(
                             advance_err = _verify_advanced_to_next_step(
                                 page, next_spec, step_num, save_html_dir=save_html_dir,
                                 current_step_spec=step_spec, profile=profile,
+                                step_timeout_ms=step_timeout_ms,
                             )
                             if advance_err:
                                 _log(f"  ERROR: {advance_err}")
