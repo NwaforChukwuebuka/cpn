@@ -129,7 +129,7 @@ async def run_full_workflow_resilient_async(
     stop_after: str = "first_premier",
     capital_one_stop_after_step: int | None = None,
     steve_morse_delay_seconds: float = 3.0,
-    steve_morse_headless: bool = True,
+    steve_morse_headless: bool = False,
     log_callback: Callable[[str], None] | None = None,
     progress_callback: Callable[[str], Awaitable[None]] | None = None,
     retry_attempts: int = 3,
@@ -424,7 +424,7 @@ async def run_full_workflow_async(
     stop_after: str = "first_premier",
     capital_one_stop_after_step: int | None = None,
     steve_morse_delay_seconds: float = 3.0,
-    steve_morse_headless: bool = True,
+    steve_morse_headless: bool = False,
     log_callback: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """

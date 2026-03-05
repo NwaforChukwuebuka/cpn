@@ -288,7 +288,7 @@ class FullWorkflowQueueService:
                 stop_after=record.request.stop_after,
                 capital_one_stop_after_step=record.request.capital_one_stop_after_step,
                 steve_morse_delay_seconds=record.request.steve_morse_delay_seconds,
-                steve_morse_headless=True,
+                steve_morse_headless=False,
                 log_callback=_log,
                 progress_callback=_progress,
                 retry_attempts=self._retry_attempts,

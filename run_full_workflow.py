@@ -105,7 +105,7 @@ async def _main() -> int:
         stop_after=args.stop_after,
         capital_one_stop_after_step=args.capital_one_stop_after,
         steve_morse_delay_seconds=args.steve_morse_delay,
-        steve_morse_headless=True,
+        steve_morse_headless=False,
         log_callback=_cli_log,
     )
 
