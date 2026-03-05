@@ -235,12 +235,17 @@ async def run_full_workflow_resilient_async(
     if not (last_completed and _STEP_INDEX[last_completed] >= _STEP_INDEX["stevemorse"]):
         _log("Step 1/5: Steve Morse (five-digit decoder)...")
         await _notify(PROGRESS_GETTING_CPN)
+        steve_profile_id = get_profile_for_index(profile_base_index)
 
         async def _run_steve() -> dict[str, Any]:
+            if adspower_step_gate is not None:
+                await adspower_step_gate.wait_turn("stevemorse")
             return await async_run_five_digit_decoder(
                 state,
                 delay_seconds=steve_morse_delay_seconds,
                 headless=steve_morse_headless,
+                adspower_profile=steve_profile_id,
+                adspower_api_base=adspower_api_base,
             )
 
         ok, steve_result, err = await _run_step_with_retries(

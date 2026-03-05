@@ -24,6 +24,7 @@ import asyncio
 import json
 import random
 import sys
+import time
 from pathlib import Path
 
 from .steve_morse import DEFAULT_DATA_PATH, get_latest_state_range
@@ -33,10 +34,74 @@ try:
 except ImportError:
     sync_playwright = None  # type: ignore[misc, assignment]
 
+try:
+    import requests
+except ImportError:
+    requests = None  # type: ignore[misc, assignment]
+
+try:
+    from modules.adspower_refresh import rotate_ip_sync
+except ImportError:
+    rotate_ip_sync = None  # type: ignore[misc, assignment]
+
 URL = "https://stevemorse.org/ssn/ssn.html"
 NOT_ISSUED_MARKER = "Not Issued"
 MAX_GROUP_TRIES = 99
 DEFAULT_DELAY_SECONDS = 20
+
+# When the server is unhappy (e.g. rate limit), the page can show these; we refresh IP and retry.
+RATE_LIMIT_PHRASES = ("unexplained error", "please notify me")
+MAX_REFRESH_RETRIES = 2
+REFRESH_WAIT_AFTER_SECONDS = 15
+DEFAULT_ADSPOWER_API = "http://127.0.0.1:50325"
+DEFAULT_REFRESH_HOST = "127.0.0.1:20725"
+
+
+def _is_rate_limited(text: str) -> bool:
+    """True if the result text indicates server rate limit / error (e.g. 'unexplained error', 'Please notify me')."""
+    if not text:
+        return False
+    lower = text.lower()
+    return any(phrase in lower for phrase in RATE_LIMIT_PHRASES)
+
+
+def _adspower_start(profile_id: str, api_base: str) -> tuple[str | None, str | None]:
+    """Start AdsPower profile; return (Puppeteer WebSocket URL, error_message)."""
+    if requests is None:
+        return None, "requests not installed"
+    url = f"{api_base.rstrip('/')}/api/v2/browser-profile/start"
+    try:
+        r = requests.post(url, json={"profile_id": profile_id}, timeout=30)
+        body = r.text
+        try:
+            out = r.json()
+        except Exception:
+            out = {}
+        if r.status_code != 200:
+            return None, f"HTTP {r.status_code}: {body[:500]}"
+        if out.get("code") != 0:
+            msg = out.get("msg", body) or "start failed"
+            return None, f"AdsPower: {msg}"
+        ws = (out.get("data") or {}).get("ws") or {}
+        puppeteer_url = ws.get("puppeteer")
+        if not puppeteer_url:
+            return None, f"AdsPower response had no ws.puppeteer: {json.dumps(out)[:300]}"
+        return puppeteer_url, None
+    except requests.exceptions.ConnectionError as e:
+        return None, f"Cannot reach AdsPower at {api_base}. Is it running with Local API enabled? {e}"
+    except Exception as e:
+        return None, str(e)
+
+
+def _adspower_stop(profile_id: str, api_base: str) -> None:
+    """Stop AdsPower profile. Never raises."""
+    if requests is None:
+        return
+    url = f"{api_base.rstrip('/')}/api/v2/browser-profile/stop"
+    try:
+        requests.post(url, json={"profile_id": profile_id}, timeout=10)
+    except Exception:
+        pass
 
 
 def _parse_ssn_range(text: str) -> tuple[int, int] | None:
@@ -61,9 +126,16 @@ def _run_flow(
     data_path: Path | None,
     delay_seconds: float,
     headless: bool,
+    adspower_profile: str | None = None,
+    adspower_api_base: str = DEFAULT_ADSPOWER_API,
+    refresh_host: str = DEFAULT_REFRESH_HOST,
 ) -> dict:
     """
     Run the full flow in the browser. Returns a result dict suitable for JSON output.
+
+    When adspower_profile is set, uses that AdsPower browser (so traffic uses that IP).
+    If the page shows rate-limit text ("unexplained error", "Please notify me"), triggers
+    IP refresh via AdsPower refresh page and retries up to MAX_REFRESH_RETRIES times.
     """
     config = get_latest_state_range(state, data_path)
     if not config:
@@ -82,105 +154,154 @@ def _run_flow(
     config_low = config["low"]
     config_high = config["high"]
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        try:
-            page = browser.new_page()
-
-            # Step 1: Navigate
-            page.goto(URL, wait_until="domcontentloaded", timeout=30_000)
-
-            # Step 2b: Select latest state in Three-Digit Decoder and read 3-digit range
-            state_select = page.locator('select[name="state"]')
-            state_select.select_option(label=config_label)
-
-            # Read the "SSN starting with" range (e.g. "766 to 772")
-            ssn_option = page.locator('select[name="ssn"]').evaluate(
-                """(sel) => {
-                    const opt = sel.options[sel.selectedIndex];
-                    return opt ? opt.textContent.trim() : '';
-                }"""
-            )
-            web_range = _parse_ssn_range(ssn_option) if ssn_option else None
-
-            if web_range is None:
-                return {
-                    "ok": False,
-                    "error": f"Could not read 3-digit range from page (got: {ssn_option!r})",
-                    "prefix_5": None,
-                    "area": None,
-                    "group": None,
-                    "state": state,
-                    "date_range_used": config_label,
-                    "verified_range": [config_low, config_high],
-                }
-
-            web_low, web_high = web_range
-            if (web_low, web_high) != (config_low, config_high):
-                # Prefer website per note.md
-                low, high = web_low, web_high
-            else:
-                low, high = config_low, config_high
-
-            # Step 3: Random area in verified range
-            area = random.randint(low, high)
-            area_str = f"{area:03d}"
-
-            # Step 4: Five-Digit Decoder — set area, then try groups until "Not Issued"
-            page.locator('select[name="ssn1"]').select_option(value=area_str)
-
-            groups = [f"{i:02d}" for i in range(1, 100)]
-            random.shuffle(groups)
-            found_group: str | None = None
-            last_result_text: str | None = None
-
-            for i, group in enumerate(groups):
-                if i >= MAX_GROUP_TRIES:
-                    break
-
-                page.locator('select[name="ssn2"]').select_option(value=group)
-
-                # Wait for result: either wait for network (ssn.php) or for #wherewhen to update
-                page.wait_for_timeout(800)
-                result_el = page.locator("#wherewhen")
-                result_el.wait_for(state="visible", timeout=5_000)
-                text = result_el.text_content() or ""
-                text = text.strip()
-                last_result_text = text
-
-                if NOT_ISSUED_MARKER in text:
-                    found_group = group
-                    break
-
-                if i < len(groups) - 1 and delay_seconds > 0:
-                    page.wait_for_timeout(int(delay_seconds * 1000))
-
-            if found_group is None:
-                return {
-                    "ok": False,
-                    "error": f"Did not find a 'Not Issued' group after {MAX_GROUP_TRIES} tries. Last result: {last_result_text!r}. Consider rate limit / delays.",
-                    "prefix_5": None,
-                    "area": area_str,
-                    "group": None,
-                    "state": state,
-                    "date_range_used": config_label,
-                    "verified_range": [low, high],
-                }
-
-            prefix_5 = f"{area_str}-{found_group}"
+    ws_url: str | None = None
+    if adspower_profile:
+        ws_url, start_err = _adspower_start(adspower_profile, adspower_api_base)
+        if not ws_url:
             return {
-                "ok": True,
-                "error": None,
-                "prefix_5": prefix_5,
-                "area": area_str,
-                "group": found_group,
+                "ok": False,
+                "error": start_err or f"Failed to start AdsPower profile {adspower_profile}",
+                "prefix_5": None,
+                "area": None,
+                "group": None,
                 "state": state,
                 "date_range_used": config_label,
-                "verified_range": [low, high],
+                "verified_range": [config_low, config_high],
             }
 
-        finally:
-            browser.close()
+    try:
+        with sync_playwright() as p:
+            if ws_url:
+                browser = p.chromium.connect_over_cdp(ws_url)
+            else:
+                browser = p.chromium.launch(headless=headless)
+            try:
+                page = browser.new_page() if not ws_url else None
+                if page is None and ws_url:
+                    for ctx in browser.contexts:
+                        if ctx.pages:
+                            page = ctx.pages[0]
+                            break
+                    if page is None:
+                        page = browser.new_page()
+
+                for refresh_attempt in range(MAX_REFRESH_RETRIES + 1):
+                    # Step 1: Navigate (or reload after IP refresh)
+                    page.goto(URL, wait_until="domcontentloaded", timeout=30_000)
+
+                    # Step 2b: Select latest state in Three-Digit Decoder and read 3-digit range
+                    state_select = page.locator('select[name="state"]')
+                    state_select.select_option(label=config_label)
+
+                    ssn_option = page.locator('select[name="ssn"]').evaluate(
+                        """(sel) => {
+                            const opt = sel.options[sel.selectedIndex];
+                            return opt ? opt.textContent.trim() : '';
+                        }"""
+                    )
+                    web_range = _parse_ssn_range(ssn_option) if ssn_option else None
+
+                    if web_range is None:
+                        return {
+                            "ok": False,
+                            "error": f"Could not read 3-digit range from page (got: {ssn_option!r})",
+                            "prefix_5": None,
+                            "area": None,
+                            "group": None,
+                            "state": state,
+                            "date_range_used": config_label,
+                            "verified_range": [config_low, config_high],
+                        }
+
+                    web_low, web_high = web_range
+                    if (web_low, web_high) != (config_low, config_high):
+                        low, high = web_low, web_high
+                    else:
+                        low, high = config_low, config_high
+
+                    # Step 3: Random area in verified range
+                    area = random.randint(low, high)
+                    area_str = f"{area:03d}"
+
+                    # Step 4: Five-Digit Decoder — set area, then try groups until "Not Issued"
+                    page.locator('select[name="ssn1"]').select_option(value=area_str)
+
+                    groups = [f"{i:02d}" for i in range(1, 100)]
+                    random.shuffle(groups)
+                    found_group = None
+                    last_result_text = None
+                    hit_rate_limit = False
+
+                    for i, group in enumerate(groups):
+                        if i >= MAX_GROUP_TRIES:
+                            break
+
+                        page.locator('select[name="ssn2"]').select_option(value=group)
+                        page.wait_for_timeout(800)
+                        result_el = page.locator("#wherewhen")
+                        result_el.wait_for(state="visible", timeout=5_000)
+                        text = result_el.text_content() or ""
+                        text = text.strip()
+                        last_result_text = text
+
+                        if NOT_ISSUED_MARKER in text:
+                            found_group = group
+                            break
+
+                        if _is_rate_limited(text):
+                            hit_rate_limit = True
+                            last_result_text = text
+                            break
+
+                        if i < len(groups) - 1 and delay_seconds > 0:
+                            page.wait_for_timeout(int(delay_seconds * 1000))
+
+                    if found_group is not None:
+                        prefix_5 = f"{area_str}-{found_group}"
+                        return {
+                            "ok": True,
+                            "error": None,
+                            "prefix_5": prefix_5,
+                            "area": area_str,
+                            "group": found_group,
+                            "state": state,
+                            "date_range_used": config_label,
+                            "verified_range": [low, high],
+                        }
+
+                    if hit_rate_limit and adspower_profile and refresh_attempt < MAX_REFRESH_RETRIES and rotate_ip_sync:
+                        ok = rotate_ip_sync(adspower_profile, headless=True, host=refresh_host)
+                        if ok:
+                            time.sleep(REFRESH_WAIT_AFTER_SECONDS)
+                            continue
+                    if hit_rate_limit:
+                        err = f"Server returned rate-limit style message: {last_result_text!r}. Use --adspower-profile and refresh to rotate IP and retry."
+                        return {
+                            "ok": False,
+                            "error": err,
+                            "prefix_5": None,
+                            "area": area_str,
+                            "group": None,
+                            "state": state,
+                            "date_range_used": config_label,
+                            "verified_range": [low, high],
+                        }
+
+                    return {
+                        "ok": False,
+                        "error": f"Did not find a 'Not Issued' group after {MAX_GROUP_TRIES} tries. Last result: {last_result_text!r}. Consider rate limit / delays.",
+                        "prefix_5": None,
+                        "area": area_str,
+                        "group": None,
+                        "state": state,
+                        "date_range_used": config_label,
+                        "verified_range": [low, high],
+                    }
+            finally:
+                browser.close()
+    finally:
+        if adspower_profile:
+            _adspower_stop(adspower_profile, adspower_api_base)
 
 
 async def async_run_five_digit_decoder(
@@ -189,11 +310,17 @@ async def async_run_five_digit_decoder(
     data_path: Path | None = None,
     delay_seconds: float = DEFAULT_DELAY_SECONDS,
     headless: bool = True,
+    adspower_profile: str | None = None,
+    adspower_api_base: str = DEFAULT_ADSPOWER_API,
+    refresh_host: str = DEFAULT_REFRESH_HOST,
 ) -> dict:
     """
     Async entrypoint for the five-digit decoder flow. Runs the sync Playwright
     flow in a thread pool so the event loop is not blocked. Safe for many
     parallel user sessions (each gets its own thread and browser instance).
+
+    When adspower_profile is set, uses that AdsPower browser; on rate-limit
+    ("unexplained error" / "Please notify me") triggers IP refresh and retries.
     """
     if sync_playwright is None:
         return {
@@ -213,6 +340,9 @@ async def async_run_five_digit_decoder(
         path,
         delay_seconds,
         headless,
+        adspower_profile,
+        adspower_api_base,
+        refresh_host,
     )
 
 
@@ -245,6 +375,24 @@ def main() -> int:
         help="Run browser headless",
     )
     parser.add_argument(
+        "--adspower-profile",
+        type=str,
+        default=None,
+        help="AdsPower profile ID; use when rate-limited (triggers IP refresh and retry)",
+    )
+    parser.add_argument(
+        "--adspower-api",
+        type=str,
+        default=DEFAULT_ADSPOWER_API,
+        help="AdsPower Local API base URL",
+    )
+    parser.add_argument(
+        "--refresh-host",
+        type=str,
+        default=DEFAULT_REFRESH_HOST,
+        help="Host for AdsPower IP refresh page URL",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -269,6 +417,9 @@ def main() -> int:
         data_path=data_path,
         delay_seconds=args.delay,
         headless=args.headless,
+        adspower_profile=args.adspower_profile,
+        adspower_api_base=args.adspower_api,
+        refresh_host=args.refresh_host,
     )
 
     out = json.dumps(result, indent=2)
