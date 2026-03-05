@@ -2,6 +2,8 @@
 
 Builds `profile.json` from a template and optional `full_cpn.json` / `verification.json`. No browser automation; config and validation only. Output is used by **Module E** (e.g. Capital One) to fill applications.
 
+**Concurrent execution:** For multi-user use (e.g. Telegram bot), use `build_profile_from_data()` or `build_profile_async()` with in-memory dicts per session. No global state; each call is isolated.
+
 ## Inputs
 
 - **`profile_template.json`** — Base profile (name, address, phone, email, DOB, income, job, time at address/job).
@@ -25,7 +27,28 @@ Builds `profile.json` from a template and optional `full_cpn.json` / `verificati
 - **Job type:** must be `Self Employed`.
 - **Time at address / time on job:** expected `5 Years 5 Months` (warnings only unless `--strict`).
 
-## Run
+## API (concurrent / bot use)
+
+```python
+from modules.profile_builder import build_profile_from_data, build_profile_async, profile_for_output
+
+# Sync: pass per-session template and optional full_cpn / verification dicts
+template = {"first_name": "Jane", "last_name": "Doe", ...}  # or load from session
+full_cpn = {"full": "772-11-5245", "ok": True}  # from SSN validator result
+profile, errors = build_profile_from_data(template, full_cpn=full_cpn, verification=None)
+if errors:
+    # handle validation errors
+    pass
+# Write to session-specific path or use in memory
+clean = profile_for_output(profile)  # strips _verification_* etc.
+
+# Async (non-blocking): same contract
+profile, errors = await build_profile_async(template, full_cpn=full_cpn)
+```
+
+Each caller uses their own `template`, `full_cpn`, and `verification` dicts; no shared files or global state.
+
+## Run (CLI)
 
 From project root:
 

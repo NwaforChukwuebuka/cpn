@@ -104,3 +104,26 @@ Output is JSON, e.g. `{ "ok": true, "prefix_5": "769-99", "area": "769", "group"
 ## Failure isolation
 
 If the data file is missing or the state is unknown, this module writes the error into the output JSON and returns a non-zero exit code. Downstream modules (B, C, …) should not run until `partial_cpn.json` has `ok === true`.
+
+## Concurrent usage (async / many parallel users)
+
+The module is designed for **concurrent use**: multiple users (e.g. in a Telegram bot) can call it at the same time without conflicts or blocking each other.
+
+- **Stateless logic** — `steve_morse.py` has no shared mutable state; all functions are pure given their inputs.
+- **Async entrypoints** — Use these from an async event loop (e.g. aiogram) so the loop is not blocked:
+  - `async_get_partial_cpn(state, data_path=None, *, prefer_recent=True)` → same result as `get_partial_cpn`, runs in a thread pool.
+  - `async_get_latest_state_range(state, data_path=None)` → same as `get_latest_state_range`, runs in a thread pool.
+  - `async_run(state, output_path, config_path=None, data_path=None)` → same as `run`, runs in a thread pool.
+  - `async_run_five_digit_decoder(state, *, data_path=None, delay_seconds=20, headless=True)` → runs the Playwright flow in a thread pool; each concurrent call uses its own browser instance, so many users can run in parallel.
+
+Example from an async bot:
+
+```python
+from modules.steve_morse_prefix import async_get_partial_cpn, async_run_five_digit_decoder
+
+# Non-blocking; safe to await from many concurrent user sessions
+result = await async_get_partial_cpn("Florida")
+verified = await async_run_five_digit_decoder("California", delay_seconds=15, headless=True)
+```
+
+The architecture is **scalable and asynchronous**: I/O and CPU work run off the event loop via `asyncio.to_thread`, so one process can handle many parallel user sessions without blocking.

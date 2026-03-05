@@ -1,0 +1,43 @@
+{
+  "main_url": "https://www.mypremiercreditcard.com/",
+  "apply_now_selectors": [
+    "a.green-solid-button[href*='premiercardoffer.net']",
+    "a[href*='premiercardoffer.net'][href*='jump=ap1']",
+    "a:has-text('Apply Now')",
+    ".desktop-link a.green-solid-button"
+  ],
+  "steps": [
+    {
+      "step": 1,
+      "description": "About You (page 1): name, email, phone, DOB, consent",
+      "fields": [
+        {"profile_key": "capital_one.legal_first_name", "label": "First Name", "selector": "#FirstName"},
+        {"profile_key": "capital_one.legal_middle_initial", "label": "M.I.", "selector": "#MiddleInitial"},
+        {"profile_key": "capital_one.legal_last_name", "label": "Last Name", "selector": "#LastName"},
+        {"profile_key": "email", "label": "Email", "selector": "#Email"},
+        {"profile_key": "phone", "label": "Cell Phone", "selector": "#CellPhone"},
+        {"profile_key": "date_of_birth", "label": "Birthday (MM/DD/YYYY)", "selector": "#DOB"},
+        {"type": "checkbox", "selector": "#ConsentToTerms", "label": "I agree that I have read", "check": true}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "form button[type='submit'], button.btn:has-text('Continue')"
+    },
+    {
+      "step": 2,
+      "description": "Apply (page 2): address, SSN",
+      "advance_check_selector": "#Address, #City",
+      "fields": [
+        {"profile_key": "address.street", "label": "Address", "selector": "#Address", "google_autocomplete": true},
+        {"profile_key": "address.line2", "label": "Apt, Suite, Etc", "selector": "#Address2"},
+        {"profile_key": "address.city", "label": "City", "selector": "#City"},
+        {"profile_key": "address.state", "label": "State", "selector": "#State"},
+        {"profile_key": "address.zip", "label": "ZIP Code", "selector": "#ZipCode"},
+        {"profile_key": "ssn_formatted", "label": "Social Security Number", "selector": "#SSN"},
+        {"profile_key": "ssn_formatted", "label": "Confirm Social Security Number", "selector": "#ConfSSN"}
+      ],
+      "continue_button": "Continue",
+      "continue_selector": "form button[type='submit'], button.btn:has-text('Continue')"
+    }
+  ],
+  "note": "Main page → Apply Now → page_1 (About You) → page_2 (address + SSN). Uses same profile keys as Capital One where applicable."
+}

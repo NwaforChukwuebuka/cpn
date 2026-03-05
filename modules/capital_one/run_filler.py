@@ -1,19 +1,35 @@
 """
 Module E — Capital One credit card application filler.
 
-Reads data/profile.json and fills the 8-step Capital One application form
-using Playwright via AdsPower browser. Uses modules/capital_one/steps.json for step/field mapping.
-Output: data/tri_merge_log.json (and optionally step HTML for analysis).
+Reads profile (dict or file) and fills the 8-step Capital One application form
+using Playwright via AdsPower browser. Uses steps config (dict or file) for step/field mapping.
+
+Concurrent execution: use run_filler_from_data() or run_filler_async() with in-memory
+profile and steps_config. Each session uses its own adspower_profile (e.g. from a pool).
+No global state; log and HTML paths are per-call. Optional log_callback for per-session logging.
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# When run as script (e.g. python modules/capital_one/run_filler.py), ensure project root is on path
+if __name__ == "__main__":
+    _root = Path(__file__).resolve().parent.parent.parent
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
 import argparse
+import asyncio
 import json
 import re
 import sys
+import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 try:
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
@@ -25,6 +41,8 @@ try:
 except ImportError:
     requests = None  # type: ignore[misc, assignment]
 
+from modules.adspower_profiles import DEFAULT_ADSPOWER_PROFILE
+
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_PROFILE_PATH = DEFAULT_PROJECT_ROOT / "data" / "profile.json"
 DEFAULT_STEPS_CONFIG = Path(__file__).resolve().parent / "steps.json"
@@ -32,13 +50,23 @@ DEFAULT_LOG_PATH = DEFAULT_PROJECT_ROOT / "data" / "tri_merge_log.json"
 CAPITAL_ONE_APPLY_URL = "https://applynow.capitalone.com/?productId=37216"
 DEFAULT_STEP_TIMEOUT_MS = 25_000
 DEFAULT_NAV_TIMEOUT_MS = 60_000
-DEFAULT_ADSPOWER_PROFILE = "k19jxste"
 DEFAULT_ADSPOWER_API = "http://127.0.0.1:50325"
 LOG_PREFIX = "[Capital One]"
 
+# Thread-local log callback for concurrent runs; set inside _run_filler_core.
+_log_callback: threading.local = threading.local()
+
 
 def _log(msg: str) -> None:
-    print(f"{LOG_PREFIX} {msg}", flush=True)
+    """Log to callback if set (per-session), else to stdout. Safe for concurrent use."""
+    cb = getattr(_log_callback, "callback", None)
+    if cb is not None:
+        try:
+            cb(f"{LOG_PREFIX} {msg}")
+        except Exception:
+            pass
+    else:
+        print(f"{LOG_PREFIX} {msg}", flush=True)
 
 
 def _project_root(root: Path | None) -> Path:
@@ -108,6 +136,69 @@ def get_profile_value(profile: dict, key: str) -> str | int | None:
     return str(val)
 
 
+def _get_visible_step_section(page, step_num: int | None = None):
+    """
+    Return the visible step section locator (cdk stepper content section), or None.
+    If step_num is provided, prefer that exact step section.
+    """
+    normalized_step_num: int | None
+    if isinstance(step_num, int):
+        normalized_step_num = step_num
+    elif isinstance(step_num, str) and step_num.isdigit():
+        normalized_step_num = int(step_num)
+    else:
+        normalized_step_num = None
+
+    selectors: list[str] = []
+    if normalized_step_num is not None and normalized_step_num > 0:
+        zero_idx = normalized_step_num - 1
+        selectors.append(f"section#cdk-stepper-web-shell0-content-{zero_idx}:not(.hidden)")
+        selectors.append(f"section#cdk-stepper-web-shell0-content-{zero_idx}")
+    selectors.append("section[id^='cdk-stepper-web-shell0-content-']:not(.hidden)")
+    selectors.append("section[id^='cdk-stepper-web-shell0-content-']")
+
+    for sel in selectors:
+        try:
+            sections = page.locator(sel)
+            count = _count(sections)
+            for i in range(count):
+                sec = sections.nth(i)
+                try:
+                    if not sec.is_visible():
+                        continue
+                    if normalized_step_num is None:
+                        return sec
+                    # If we asked for a specific step, ensure counter matches when present.
+                    counter = sec.locator(".step-counter")
+                    if _count(counter) == 0:
+                        return sec
+                    text = (counter.first.inner_text() or "").strip()
+                    if re.search(rf"\b{normalized_step_num}\s+of\s+8\b", text, re.I):
+                        return sec
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _get_step_scope(page, step_num: int | None = None):
+    """Return a scope object (visible step section when possible, else page)."""
+    section = _get_visible_step_section(page, step_num=step_num)
+    return section if section is not None else page
+
+
+def _get_scope_id_for_log(scope, page) -> str:
+    """Return a string describing the active scope (section id or page) for debug logging."""
+    if scope is page:
+        return "page (no step section)"
+    try:
+        aid = scope.first.get_attribute("id")
+        return aid if aid else "(no id)"
+    except Exception as e:
+        return f"error: {e}"
+
+
 def fill_step(
     page,
     profile: dict,
@@ -122,6 +213,8 @@ def fill_step(
     errors: list[str] = []
     # Track filled by (profile_key, field_id) so the same value can fill multiple fields (e.g. SSN + Confirm SSN).
     filled: set[tuple[str, str]] = set()
+    scope = _get_step_scope(page, step_spec.get("step"))
+    _log(f"  [DEBUG] Active step section: {_get_scope_id_for_log(scope, page)}")
 
     for field_spec in step_spec.get("fields", []):
         profile_key = field_spec.get("profile_key")
@@ -153,7 +246,7 @@ def fill_step(
                 for sel in selectors:
                     if not sel:
                         continue
-                    loc = page.locator(sel)
+                    loc = scope.locator(sel)
                     if _count(loc) > 0:
                         _log(f"  Clicking radio via selector: {sel}")
                         loc.first.click()
@@ -170,9 +263,9 @@ def fill_step(
                         question_pattern = re.compile(r"residency|resident status|U\.S\. residency", re.I)
                     if question_pattern:
                         # Try fieldset/radiogroup first, then any block that contains question + radios
-                        section = page.locator("fieldset, [role='radiogroup']").filter(has=page.get_by_text(question_pattern))
+                        section = scope.locator("fieldset, [role='radiogroup']").filter(has=scope.get_by_text(question_pattern))
                         if _count(section) == 0:
-                            section = page.locator("[class*='field'], [class*='radio'], .form-group").filter(has=page.get_by_text(question_pattern)).filter(has=page.locator("input[type=radio], [role='radio']"))
+                            section = scope.locator("[class*='field'], [class*='radio'], .form-group").filter(has=scope.get_by_text(question_pattern)).filter(has=scope.locator("input[type=radio], [role='radio']"))
                         if section and _count(section) > 0:
                             opt = section.first.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
                             if _count(opt) > 0:
@@ -181,14 +274,14 @@ def fill_step(
                                 clicked = True
                 if not clicked and not optional:
                     # Try visible label text first (only for required fields).
-                    label_loc = page.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
+                    label_loc = scope.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
                     if _count(label_loc) > 0:
                         _log(f"  Clicking visible label text '{label}'...")
                         label_loc.first.click()
                         clicked = True
                 if not clicked and not optional:
                     # Fallback to associated label.
-                    label_loc = page.get_by_label(label, exact=False)
+                    label_loc = scope.get_by_label(label, exact=False)
                     if _count(label_loc) > 0:
                         _log(f"  Clicking associated label '{label}'...")
                         label_loc.first.click()
@@ -216,11 +309,11 @@ def fill_step(
         # Try selector first (for id-based targeting), then label, then placeholder
         locator = None
         if field_spec.get("selector"):
-            locator = page.locator(field_spec["selector"])
+            locator = scope.locator(field_spec["selector"])
         if (locator is None or _count(locator) == 0) and field_spec.get("label"):
-            locator = page.get_by_label(field_spec["label"], exact=False)
+            locator = scope.get_by_label(field_spec["label"], exact=False)
         if (locator is None or _count(locator) == 0) and field_spec.get("placeholder"):
-            locator = page.get_by_placeholder(field_spec["placeholder"], exact=False)
+            locator = scope.get_by_placeholder(field_spec["placeholder"], exact=False)
         if locator is None or _count(locator) == 0:
             msg = f"No matching input found for {profile_key}"
             _log(f"  ERROR: {msg}")
@@ -290,16 +383,19 @@ def fill_step(
     _log(f"  Clicking '{btn_text}'...")
     clicked = False
     patterns = []
+    search_roots = [scope, page] if scope is not page else [scope]
     if step_spec.get("continue_selector"):
-        patterns.append(page.locator(step_spec["continue_selector"]))
-    patterns.extend([
-        page.get_by_role("button", name=re.compile(re.escape(btn_text), re.I)),
-        page.get_by_role("link", name=re.compile(re.escape(btn_text), re.I)),
-        page.get_by_text(re.compile(re.escape(btn_text), re.I)),
-        page.locator(f"button:has-text('{btn_text}')"),
-        page.locator(f"input[type='submit'][value*='{btn_text[:4]}']"),
-        page.locator(f"[data-testid*='continue'], [data-testid*='submit']"),
-    ])
+        for root in search_roots:
+            patterns.append(root.locator(step_spec["continue_selector"]))
+    for root in search_roots:
+        patterns.extend([
+            root.get_by_role("button", name=re.compile(re.escape(btn_text), re.I)),
+            root.get_by_role("link", name=re.compile(re.escape(btn_text), re.I)),
+            root.get_by_text(re.compile(re.escape(btn_text), re.I)),
+            root.locator(f"button:has-text('{btn_text}')"),
+            root.locator(f"input[type='submit'][value*='{btn_text[:4]}']"),
+            root.locator(f"[data-testid*='continue'], [data-testid*='submit']"),
+        ])
     for loc in patterns:
         try:
             if _count(loc) > 0:
@@ -423,6 +519,8 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
     """
     _log("  Refilling full address before retry...")
     refilled_any = False
+    scope = _get_step_scope(page, 3)
+    _log(f"  [DEBUG] Active step section (refill address): {_get_scope_id_for_log(scope, page)}")
 
     # Mapping from profile-key suffix → Capital One's alternative ID suffix
     _ALT_ID_MAP = {
@@ -441,7 +539,7 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
         # 1. Original selector from steps.json
         sel = field_spec.get("selector")
         if sel:
-            loc = page.locator(sel)
+            loc = scope.locator(sel)
             if _count(loc) > 0:
                 return loc
 
@@ -451,14 +549,14 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
         alt_id = _ALT_ID_MAP.get(suffix)
         if alt_id:
             # Dots in id attr require attribute selector syntax, not #foo.bar
-            loc = page.locator(f'[id="{alt_id}"]')
+            loc = scope.locator(f'[id="{alt_id}"]')
             if _count(loc) > 0:
                 return loc
 
         # 3. Label-based fallback
         label = field_spec.get("label")
         if label:
-            loc = page.get_by_label(label, exact=False)
+            loc = scope.get_by_label(label, exact=False)
             if _count(loc) > 0:
                 return loc
 
@@ -566,12 +664,18 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
 
 def _click_continue_button(page) -> bool:
     """Click the Continue button on whichever step is currently visible. Returns True if clicked."""
-    patterns = [
-        page.get_by_role("button", name=re.compile(r"continue", re.I)),
-        page.get_by_role("link",   name=re.compile(r"continue", re.I)),
-        page.locator("button:has-text('Continue')"),
-        page.locator("[data-testid*='continue'], [data-testid*='submit']"),
-    ]
+    current_step = _get_visible_step_num(page)
+    scope = _get_step_scope(page, current_step)
+    _log(f"  [DEBUG] Active step section (Continue): {_get_scope_id_for_log(scope, page)}")
+    patterns = []
+    search_roots = [scope, page] if scope is not page else [scope]
+    for root in search_roots:
+        patterns.extend([
+            root.get_by_role("button", name=re.compile(r"continue", re.I)),
+            root.get_by_role("link", name=re.compile(r"continue", re.I)),
+            root.locator("button:has-text('Continue')"),
+            root.locator("[data-testid*='continue'], [data-testid*='submit']"),
+        ])
     for loc in patterns:
         try:
             if _count(loc) > 0:
@@ -672,42 +776,48 @@ def _verify_advanced_to_next_step(
     RETRY_INTERVAL_MS = 5000
 
     def _is_advanced() -> bool:
+        if _get_visible_step_num(page) == current_step_num + 1:
+            return True
+        next_scope = _get_visible_step_section(page, step_num=current_step_num + 1)
+        if next_scope is None:
+            return False
         for sel in check_selectors:
             try:
-                loc = page.locator(sel)
+                loc = next_scope.locator(sel)
                 if _count(loc) > 0 and loc.first.is_visible():
                     return True
             except Exception:
                 continue
         if first_label:
             try:
-                label_loc = page.get_by_label(first_label, exact=False)
+                label_loc = next_scope.get_by_label(first_label, exact=False)
                 if _count(label_loc) > 0 and label_loc.first.is_visible():
                     return True
             except Exception:
                 pass
-        if _get_visible_step_num(page) == current_step_num + 1:
-            return True
         return False
 
     def _check_hard_error() -> str | None:
         """Return error message if a known hard error is visible, else None.
         On step 3 all address-related errors are retryable, so returns None."""
+        current_scope = _get_step_scope(page, current_step_num)
         page_text_fragments: list[str] = []
         for err_sel in _ERROR_ELEMENT_SELECTORS:
             try:
-                err_loc = page.locator(err_sel)
-                if _count(err_loc) == 0:
+                err_loc = current_scope.locator(err_sel)
+                err_count = _count(err_loc)
+                if err_count == 0:
                     continue
-                err_elem = err_loc.first
-                if not err_elem.is_visible():
-                    continue
-                err_text = (err_elem.inner_text() or "").strip()
-                if not err_text:
-                    continue
-                if any(p.search(err_text) for p in _LOADING_PATTERNS):
-                    continue
-                page_text_fragments.append(err_text)
+                for i in range(err_count):
+                    err_elem = err_loc.nth(i)
+                    if not err_elem.is_visible():
+                        continue
+                    err_text = (err_elem.inner_text() or "").strip()
+                    if not err_text:
+                        continue
+                    if any(p.search(err_text) for p in _LOADING_PATTERNS):
+                        continue
+                    page_text_fragments.append(err_text)
             except Exception:
                 continue
         combined = " ".join(page_text_fragments)
@@ -843,10 +953,13 @@ def _check_agreement_boxes(page) -> list[str]:
     return errors
 
 
-def run_filler(
-    profile_path: Path,
-    steps_config_path: Path,
-    log_path: Path,
+def _run_filler_core(
+    profile: dict[str, Any],
+    steps_list: list[dict[str, Any]],
+    apply_url: str,
+    log_path: Path | None,
+    *,
+    profile_path: Path | None = None,
     stop_after_step: int | None = None,
     step_timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS,
     nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
@@ -854,61 +967,39 @@ def run_filler(
     pause_after_fill_seconds: float = 0,
     adspower_profile: str = DEFAULT_ADSPOWER_PROFILE,
     adspower_api_base: str = DEFAULT_ADSPOWER_API,
-) -> dict:
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
     """
-    Run the Capital One filler using AdsPower browser. Returns a result dict with ok, error, steps_completed, log_path.
+    Core filler logic: takes in-memory profile and steps list. No file I/O for input.
+    Writes log to log_path only if log_path is not None. Thread-safe when each
+    call uses its own adspower_profile; set log_callback for per-session logging.
     """
-    _log(f"Loading profile from {profile_path}...")
-    profile = load_json(profile_path)
-    if not profile:
-        _log(f"ERROR: Could not load profile from {profile_path}")
-        return {
-            "ok": False,
-            "error": f"Could not load profile from {profile_path}",
-            "steps_completed": 0,
-            "log_path": str(log_path),
-        }
-    _log("Profile loaded.")
-
-    _log(f"Loading steps from {steps_config_path}...")
-    steps_data = load_json(steps_config_path)
-    if not steps_data or "steps" not in steps_data:
-        _log(f"ERROR: Could not load steps config from {steps_config_path}")
-        return {
-            "ok": False,
-            "error": f"Could not load steps config from {steps_config_path}",
-            "steps_completed": 0,
-            "log_path": str(log_path),
-        }
-    _log(f"Steps loaded ({len(steps_data['steps'])} steps).")
-
-    apply_url = steps_data.get("apply_url") or CAPITAL_ONE_APPLY_URL
-    steps_list = steps_data["steps"]
     all_errors: list[str] = []
     steps_completed = 0
 
-    if sync_playwright is None:
-        _log("ERROR: Playwright not installed. pip install playwright && playwright install chromium")
-        return {
-            "ok": False,
-            "error": "Playwright not installed. pip install playwright && playwright install chromium",
-            "steps_completed": 0,
-            "log_path": str(log_path),
-        }
-
-    _log("Starting AdsPower profile...")
-    ws_url, start_err = _adspower_start(adspower_profile, adspower_api_base)
-    if not ws_url:
-        _log(f"ERROR: {start_err or 'Failed to start AdsPower'}")
-        return {
-            "ok": False,
-            "error": start_err or f"Failed to start AdsPower profile {adspower_profile}",
-            "steps_completed": 0,
-            "log_path": str(log_path),
-        }
-    _log("AdsPower started, connecting browser...")
-
+    if log_callback is not None:
+        _log_callback.callback = log_callback
     try:
+        if sync_playwright is None:
+            _log("ERROR: Playwright not installed. pip install playwright && playwright install chromium")
+            return {
+                "ok": False,
+                "error": "Playwright not installed. pip install playwright && playwright install chromium",
+                "steps_completed": 0,
+                "log_path": str(log_path) if log_path else None,
+            }
+
+        _log("Starting AdsPower profile...")
+        ws_url, start_err = _adspower_start(adspower_profile, adspower_api_base)
+        if not ws_url:
+            _log(f"ERROR: {start_err or 'Failed to start AdsPower'}")
+            return {
+                "ok": False,
+                "error": start_err or f"Failed to start AdsPower profile {adspower_profile}",
+                "steps_completed": 0,
+                "log_path": str(log_path) if log_path else None,
+            }
+        _log("AdsPower started, connecting browser...")
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(ws_url)
             _log("Browser connected.")
@@ -1098,29 +1189,167 @@ def run_filler(
             _log("Stopping AdsPower profile...")
             _adspower_stop(adspower_profile, adspower_api_base)
             _log("AdsPower stopped.")
+        if hasattr(_log_callback, "callback"):
+            delattr(_log_callback, "callback")
 
-    # Write tri_merge_log.json
     log_entry = {
         "timestamp": datetime.now(UTC).isoformat(),
         "product": "capital_one_platinum",
         "url": apply_url,
-        "profile_path": str(profile_path),
+        "profile_path": str(profile_path) if profile_path else "(in-memory)",
         "steps_completed": steps_completed,
         "ok": len(all_errors) == 0,
         "errors": all_errors,
         "save_html_dir": str(save_html_dir) if save_html_dir else None,
     }
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(json.dumps(log_entry, indent=2), encoding="utf-8")
-    _log(f"Wrote log: {log_path}")
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(json.dumps(log_entry, indent=2), encoding="utf-8")
+        _log(f"Wrote log: {log_path}")
     _log(f"Done. Steps completed: {steps_completed}. Errors: {len(all_errors)}")
 
-    return {
+    result = {
         "ok": len(all_errors) == 0,
         "error": "; ".join(all_errors) if all_errors else None,
         "steps_completed": steps_completed,
-        "log_path": str(log_path),
+        "log_path": str(log_path) if log_path else None,
     }
+    if log_path is None:
+        result["log_entry"] = log_entry
+    return result
+
+
+def run_filler_from_data(
+    profile: dict[str, Any],
+    steps_config: dict[str, Any],
+    log_path: Path | None = None,
+    stop_after_step: int | None = None,
+    step_timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS,
+    nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
+    save_html_dir: Path | None = None,
+    pause_after_fill_seconds: float = 0,
+    adspower_profile: str = DEFAULT_ADSPOWER_PROFILE,
+    adspower_api_base: str = DEFAULT_ADSPOWER_API,
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """
+    Run the Capital One filler from in-memory profile and steps config. Session-isolated:
+    no shared files; use a distinct adspower_profile per concurrent user. Optional
+    log_path to write tri_merge_log.json; if None, result includes "log_entry" for caller to persist.
+    """
+    if "steps" not in steps_config:
+        return {
+            "ok": False,
+            "error": "steps_config must contain 'steps' list",
+            "steps_completed": 0,
+            "log_path": None,
+            "log_entry": None,
+        }
+    apply_url = steps_config.get("apply_url") or CAPITAL_ONE_APPLY_URL
+    return _run_filler_core(
+        profile,
+        steps_config["steps"],
+        apply_url,
+        log_path,
+        profile_path=None,
+        stop_after_step=stop_after_step,
+        step_timeout_ms=step_timeout_ms,
+        nav_timeout_ms=nav_timeout_ms,
+        save_html_dir=save_html_dir,
+        pause_after_fill_seconds=pause_after_fill_seconds,
+        adspower_profile=adspower_profile,
+        adspower_api_base=adspower_api_base,
+        log_callback=log_callback,
+    )
+
+
+async def run_filler_async(
+    profile: dict[str, Any],
+    steps_config: dict[str, Any],
+    log_path: Path | None = None,
+    stop_after_step: int | None = None,
+    step_timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS,
+    nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
+    save_html_dir: Path | None = None,
+    pause_after_fill_seconds: float = 0,
+    adspower_profile: str = DEFAULT_ADSPOWER_PROFILE,
+    adspower_api_base: str = DEFAULT_ADSPOWER_API,
+    log_callback: Callable[[str], None] | None = None,
+) -> dict[str, Any]:
+    """
+    Async wrapper: runs run_filler_from_data in a thread so the event loop is not blocked.
+    Safe for many concurrent users when each has a distinct adspower_profile.
+    """
+    return await asyncio.to_thread(
+        run_filler_from_data,
+        profile,
+        steps_config,
+        log_path,
+        stop_after_step,
+        step_timeout_ms,
+        nav_timeout_ms,
+        save_html_dir,
+        pause_after_fill_seconds,
+        adspower_profile,
+        adspower_api_base,
+        log_callback,
+    )
+
+
+def run_filler(
+    profile_path: Path,
+    steps_config_path: Path,
+    log_path: Path,
+    stop_after_step: int | None = None,
+    step_timeout_ms: int = DEFAULT_STEP_TIMEOUT_MS,
+    nav_timeout_ms: int = DEFAULT_NAV_TIMEOUT_MS,
+    save_html_dir: Path | None = None,
+    pause_after_fill_seconds: float = 0,
+    adspower_profile: str = DEFAULT_ADSPOWER_PROFILE,
+    adspower_api_base: str = DEFAULT_ADSPOWER_API,
+) -> dict[str, Any]:
+    """
+    Run the Capital One filler from file paths (CLI / single-run). Loads profile and steps
+    from disk, then runs core logic. For concurrent use, prefer run_filler_from_data or
+    run_filler_async with in-memory data and session-specific paths.
+    """
+    _log(f"Loading profile from {profile_path}...")
+    profile = load_json(profile_path)
+    if not profile:
+        _log(f"ERROR: Could not load profile from {profile_path}")
+        return {
+            "ok": False,
+            "error": f"Could not load profile from {profile_path}",
+            "steps_completed": 0,
+            "log_path": str(log_path),
+        }
+    _log("Profile loaded.")
+    _log(f"Loading steps from {steps_config_path}...")
+    steps_data = load_json(steps_config_path)
+    if not steps_data or "steps" not in steps_data:
+        _log(f"ERROR: Could not load steps config from {steps_config_path}")
+        return {
+            "ok": False,
+            "error": f"Could not load steps config from {steps_config_path}",
+            "steps_completed": 0,
+            "log_path": str(log_path),
+        }
+    _log(f"Steps loaded ({len(steps_data['steps'])} steps).")
+    apply_url = steps_data.get("apply_url") or CAPITAL_ONE_APPLY_URL
+    return _run_filler_core(
+        profile,
+        steps_data["steps"],
+        apply_url,
+        log_path,
+        profile_path=profile_path,
+        stop_after_step=stop_after_step,
+        step_timeout_ms=step_timeout_ms,
+        nav_timeout_ms=nav_timeout_ms,
+        save_html_dir=save_html_dir,
+        pause_after_fill_seconds=pause_after_fill_seconds,
+        adspower_profile=adspower_profile,
+        adspower_api_base=adspower_api_base,
+    )
 
 
 def main() -> int:

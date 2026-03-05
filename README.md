@@ -1,1 +1,22 @@
 # cpn
+
+## Telegram Marketplace Bot
+
+The Telegram app lives in `marketplace_bot/` and integrates:
+
+- Order/profile intake over Telegram (`/order`).
+- BTCPay invoice creation for BTC/LTC.
+- BTCPay webhook confirmation and queue submission.
+- Supabase Postgres persistence for users/orders/payments/workflow jobs.
+- Workflow completion callback that sends the resulting CPN CSV in Telegram.
+
+### Setup
+
+1. Copy `.env.example` to `.env` and fill all variables.
+2. Run Supabase migration: `supabase/migrations/202603040001_marketplace_bot.sql`.
+3. Install dependencies: `pip install -r requirements.txt`.
+4. Start the bot: `python -m marketplace_bot.app`.
+
+For BTCPay webhooks from the internet, run ngrok in another terminal: `python start_ngrok.py` (set `NGROK_AUTHTOKEN` and optionally `NGROK_URL` in `.env`), then set `WEBHOOK_PUBLIC_BASE_URL` to the ngrok URL (e.g. `https://your-subdomain.ngrok.app`).
+
+The bot starts Telegram polling and an HTTP webhook listener on `WEBHOOK_HOST:WEBHOOK_PORT`.

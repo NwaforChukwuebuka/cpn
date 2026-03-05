@@ -1,7 +1,7 @@
 """
-Module E — Capital One application filler.
+First Premier credit card application filler.
 
-Fills the 8-step Capital One application from profile and steps config.
+Flow: main page → Apply Now → page_1 (About You) → page_2 (address + SSN).
 Concurrent execution: use run_filler_from_data() or run_filler_async() with
 in-memory profile and steps_config; each session uses its own adspower_profile.
 """

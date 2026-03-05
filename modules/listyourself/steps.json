@@ -1,0 +1,88 @@
+{
+  "listing_url": "https://www.listyourself.net/ListYourself/listing.jsp",
+  "form_name": "listingform",
+  "submit_button_selector": "#submitRequest",
+  "submit_button_value": "Add Listing",
+  "recaptcha_sitekey": "6LcJsvoqAAAAAEtBQtEYdR8Cun6rbXcyMUICxRgW",
+  "note": "Single-page form. Submit is disabled until reCAPTCHA is solved; script waits for it to become enabled (or user solves in AdsPower window).",
+  "fields": [
+    {
+      "profile_key": "phone",
+      "selector": "input[name='F_TELNO']",
+      "label": "Phone number to list",
+      "note": "Phone; format 999-999-9999 accepted, 10 digits required"
+    },
+    {
+      "profile_key": "first_name",
+      "selector": "input[name='F_LSTGN']",
+      "label": "First Name",
+      "placeholder": "First Name"
+    },
+    {
+      "profile_key": "last_name",
+      "selector": "input[name='F_LSTNM']",
+      "label": "Last Name",
+      "placeholder": "Last Name"
+    },
+    {
+      "profile_key": "address.street",
+      "selector": "input[name='F_STRT']",
+      "label": "Street Address",
+      "placeholder": "123 East Main Street Suite 57"
+    },
+    {
+      "profile_key": "address.city",
+      "selector": "input[name='F_LOCNM']",
+      "label": "City",
+      "placeholder": "Hometown"
+    },
+    {
+      "profile_key": "address.state",
+      "selector": "input[name='F_STATE']",
+      "label": "State",
+      "placeholder": "NY"
+    },
+    {
+      "profile_key": "address.zip",
+      "selector": "input[name='F_ZIP']",
+      "label": "Zip",
+      "placeholder": "Zip"
+    },
+    {
+      "profile_key": "email",
+      "selector": "input[name='F_EMAIL']",
+      "label": "Email Address",
+      "placeholder": "jane.doe@gmail.com"
+    },
+    {
+      "profile_key": "email",
+      "selector": "input[name='EMAIL_CONFIRM']",
+      "label": "Confirm Email Address",
+      "placeholder": "jane.doe@gmail.com"
+    }
+  ],
+  "selects_defaults": [
+    {
+      "selector": "select[name='F_COUNTRYPREFIX']",
+      "value": "50",
+      "label": "United States +1"
+    },
+    {
+      "selector": "select[name='F_COUNTRY']",
+      "value": "50",
+      "label": "United States"
+    }
+  ],
+  "radio_defaults": [
+    {
+      "name": "split",
+      "value": "1",
+      "label": "Residential"
+    },
+    {
+      "name": "validationradio",
+      "value": "CallMe",
+      "label": "Call Me"
+    }
+  ]
+}

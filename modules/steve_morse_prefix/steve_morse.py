@@ -5,8 +5,15 @@ Gets a valid partial CPN (AAA-GG-XXXX) using the Steve Morse decoding rules.
 Uses collated state→area data from state_area_ranges.json (no HTML parsing).
 Always picks the area range with the latest "was issued in" date for the state
 (e.g. Louisiana (2000-....) not Louisiana (1936-1999)).
+
+Concurrency: All public functions are stateless and safe for concurrent use.
+For async/event-loop usage, use the async_* entrypoints so blocking I/O and
+CPU work run in a thread pool and do not block the event loop.
 """
 
+from __future__ import annotations
+
+import asyncio
 import json
 import random
 import re
@@ -210,6 +217,51 @@ def run(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result.get("ok", False) is True
+
+
+# --- Async entrypoints for concurrent/async usage (no blocking of event loop) ---
+
+
+async def async_get_partial_cpn(
+    state: str,
+    data_path: Optional[Path] = None,
+    *,
+    prefer_recent: bool = True,
+) -> dict:
+    """
+    Async wrapper for get_partial_cpn. Runs in a thread pool so the event loop
+    is not blocked. Safe for many parallel user sessions.
+    """
+    return await asyncio.to_thread(
+        get_partial_cpn,
+        state,
+        data_path,
+        prefer_recent=prefer_recent,
+    )
+
+
+async def async_get_latest_state_range(
+    state: str,
+    data_path: Optional[Path] = None,
+) -> Optional[dict]:
+    """
+    Async wrapper for get_latest_state_range. Runs in a thread pool.
+    Safe for concurrent use from an async bot or server.
+    """
+    return await asyncio.to_thread(get_latest_state_range, state, data_path)
+
+
+async def async_run(
+    state: str,
+    output_path: Path,
+    config_path: Optional[Path] = None,
+    data_path: Optional[Path] = None,
+) -> bool:
+    """
+    Async wrapper for run(). Writes partial_cpn.json in a thread pool.
+    Use from async bots to avoid blocking the event loop.
+    """
+    return await asyncio.to_thread(run, state, output_path, config_path, data_path)
 
 
 if __name__ == "__main__":

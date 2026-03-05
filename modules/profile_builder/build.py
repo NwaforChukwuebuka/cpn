@@ -1,18 +1,24 @@
 """
 Module D — Profile Builder (Steps 5–8).
 
-Builds profile.json from template and optional full_cpn.json / verification.json.
+Builds profile from template and optional full_cpn / verification data.
 No browser automation; config and validation only.
 Output is used by Module E (e.g. Capital One) to fill applications.
+
+Concurrent execution: use build_profile_from_data() with in-memory dicts for
+each session. No global state; each call is isolated. Safe for multiple
+Telegram bot users when each passes their own template, full_cpn, and verification.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 # Default paths relative to project root (cwd when run from repo)
 DEFAULT_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -80,49 +86,74 @@ def validate_times(time_at: str | None, time_on_job: str | None) -> list[str]:
     return errs
 
 
-def build_profile(
-    template_path: Path,
-    full_cpn_path: Path | None,
-    verification_path: Path | None,
-    project_root: Path,
-) -> tuple[dict, list[str]]:
-    template = load_json(template_path)
-    if not template:
-        return {}, [f"Could not load template: {template_path}"]
+def profile_for_output(profile: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of profile with internal keys (prefix _) removed, for writing or serialization."""
+    return {k: v for k, v in profile.items() if not k.startswith("_")}
 
+
+def _apply_cpn(profile: dict[str, Any], full_cpn: dict[str, Any] | None) -> None:
+    """Set profile['cpn'] from full_cpn dict if present. In-place, stateless per call."""
+    if not full_cpn:
+        return
+    if full_cpn.get("full"):
+        profile["cpn"] = full_cpn["full"]
+    elif full_cpn.get("ok") and "full" in full_cpn:
+        profile["cpn"] = full_cpn["full"]
+
+
+def _apply_verification(profile: dict[str, Any], verification: dict[str, Any] | None) -> None:
+    """Attach verification status to profile for logging. In-place, stateless per call."""
+    if verification is None:
+        return
+    profile["_verification_status"] = verification.get("status")
+    profile["_verification_ok"] = verification.get("ok")
+
+
+def _ensure_ssn_formatted(profile: dict[str, Any]) -> None:
+    """Set profile['ssn_formatted'] from profile['cpn']. In-place."""
+    cpn = profile.get("cpn")
+    if not cpn:
+        profile["ssn_formatted"] = ""
+        return
+    if re.match(r"^\d{3}-\d{2}-\d{4}$", cpn):
+        profile["ssn_formatted"] = cpn
+        return
+    s = re.sub(r"\D", "", cpn)
+    if len(s) == 9:
+        profile["ssn_formatted"] = f"{s[:3]}-{s[3:5]}-{s[5:]}"
+    else:
+        profile["ssn_formatted"] = cpn
+
+
+def build_profile_from_data(
+    template: dict[str, Any],
+    full_cpn: dict[str, Any] | None = None,
+    verification: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """
+    Build profile from in-memory template and optional full_cpn / verification.
+    No file I/O; stateless and safe for concurrent use. Each caller passes
+    their own dicts (e.g. per user session).
+    """
     profile = dict(template)
     errors: list[str] = []
 
-    # Overlay CPN from full_cpn.json if present
-    if full_cpn_path and full_cpn_path.is_file():
-        cpn_data = load_json(full_cpn_path)
-        if cpn_data and cpn_data.get("full"):
-            profile["cpn"] = cpn_data["full"]
-        elif cpn_data and cpn_data.get("ok") and "full" in cpn_data:
-            profile["cpn"] = cpn_data["full"]
+    _apply_cpn(profile, full_cpn)
     if not profile.get("cpn"):
-        errors.append("cpn not set (missing full_cpn.json or 'full' field)")
+        errors.append("cpn not set (missing full_cpn or 'full' field)")
 
-    # Optional: attach verification status for logging
-    if verification_path and verification_path.is_file():
-        verification = load_json(verification_path)
-        if verification is not None:
-            profile["_verification_status"] = verification.get("status")
-            profile["_verification_ok"] = verification.get("ok")
+    _apply_verification(profile, verification)
 
-    # Address: add full line for forms
     addr = profile.get("address")
     if isinstance(addr, dict):
         profile["address"] = {**addr, "full": format_address_line(addr)}
 
-    # Capital One / form-friendly fields
     profile["capital_one"] = {
         "legal_first_name": profile.get("first_name", ""),
         "legal_middle_initial": (profile.get("middle_initial") or "").strip()[:1],
         "legal_last_name": profile.get("last_name", ""),
     }
 
-    # Validation
     errors.extend(
         validate_income(
             profile.get("annual_income"),
@@ -135,17 +166,51 @@ def build_profile(
         validate_times(profile.get("time_at_address"), profile.get("time_on_job"))
     )
 
-    # SSN format for forms (some want XXX-XX-XXXX)
-    if profile.get("cpn") and not re.match(r"^\d{3}-\d{2}-\d{4}$", profile["cpn"]):
-        s = re.sub(r"\D", "", profile["cpn"])
-        if len(s) == 9:
-            profile["ssn_formatted"] = f"{s[:3]}-{s[3:5]}-{s[5:]}"
-        else:
-            profile["ssn_formatted"] = profile["cpn"]
-    else:
-        profile["ssn_formatted"] = profile.get("cpn", "")
+    _ensure_ssn_formatted(profile)
 
     return profile, errors
+
+
+async def build_profile_async(
+    template: dict[str, Any],
+    full_cpn: dict[str, Any] | None = None,
+    verification: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    """
+    Async wrapper: runs build_profile_from_data in a thread so the event loop
+    is not blocked. Use from async bot handlers for consistent async API.
+    """
+    return await asyncio.to_thread(
+        build_profile_from_data,
+        template,
+        full_cpn,
+        verification,
+    )
+
+
+def build_profile(
+    template_path: Path,
+    full_cpn_path: Path | None,
+    verification_path: Path | None,
+    project_root: Path,
+) -> tuple[dict[str, Any], list[str]]:
+    """
+    Build profile from file paths (CLI / single-run). Loads JSON then delegates
+    to build_profile_from_data. For concurrent use, prefer build_profile_from_data
+    with in-memory dicts.
+    """
+    template = load_json(template_path)
+    if not template:
+        return {}, [f"Could not load template: {template_path}"]
+
+    full_cpn = load_json(full_cpn_path) if full_cpn_path and full_cpn_path.is_file() else None
+    verification = (
+        load_json(verification_path)
+        if verification_path and verification_path.is_file()
+        else None
+    )
+
+    return build_profile_from_data(template, full_cpn=full_cpn, verification=verification)
 
 
 def main() -> int:
@@ -181,8 +246,7 @@ def main() -> int:
         if args.strict:
             return 1
 
-    # Strip internal keys before writing
-    out = {k: v for k, v in profile.items() if not k.startswith("_")}
+    out = profile_for_output(profile)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"Wrote {output}")

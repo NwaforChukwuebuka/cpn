@@ -2,6 +2,8 @@
 
 Fills the Capital One Platinum (productId=37216) 8-step application using **data/profile.json** and Playwright. **Uses AdsPower only** (no local browser launch). Writes **data/tri_merge_log.json** with steps completed and any errors.
 
+**Concurrent execution:** For multi-user use (e.g. Telegram bot), use `run_filler_from_data()` or `run_filler_async()` with in-memory `profile` and `steps_config`. Pass a distinct `adspower_profile` per session (e.g. from a profile pool). Optional `log_callback` for per-session logging; optional `log_path` to write log JSON, or omit to get `log_entry` in the result.
+
 ## Input
 
 - **data/profile.json** — From Module D. Uses:
@@ -28,7 +30,33 @@ Fills the Capital One Platinum (productId=37216) 8-step application using **data
 
 Update `steps.json` when the Capital One form changes or when you discover steps 6–8 (review/terms/submit).
 
-## Run
+## API (concurrent / bot use)
+
+```python
+from modules.capital_one import run_filler_from_data, run_filler_async, load_json
+
+# Load steps config once (or from cache)
+steps_config = load_json(Path("modules/capital_one/steps.json"))  # or pass dict
+
+# Sync: pass per-session profile and steps_config; use distinct adspower_profile per user
+result = run_filler_from_data(
+    profile=session_profile,
+    steps_config=steps_config,
+    log_path=session_log_path,  # or None to get result["log_entry"]
+    adspower_profile=profile_pool.get_for_user(user_id),
+    log_callback=lambda msg: send_to_user(user_id, msg),
+)
+
+# Async (non-blocking)
+result = await run_filler_async(
+    profile=session_profile,
+    steps_config=steps_config,
+    adspower_profile=session_profile_id,
+)
+# result["ok"], result["steps_completed"], result.get("log_entry")
+```
+
+## Run (CLI)
 
 **Requires:** AdsPower running with Local API enabled (default `http://127.0.0.1:50325`). Create an AdsPower browser profile and pass its ID.
 

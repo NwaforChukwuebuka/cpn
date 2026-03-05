@@ -11,11 +11,16 @@ Implements the flow in note.md and INVESTIGATION_STEPHEN_MORSE_FLOW.md:
 
 Rate limiting: each Five-Digit lookup hits the server; use --delay between tries
 (e.g. 20+ seconds) to avoid bans.
+
+Concurrency: Use async_run_five_digit_decoder() from async code (e.g. Telegram bot).
+Each call runs in a thread with its own browser, so many users can run in parallel
+without blocking the event loop or each other.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import random
 import sys
@@ -176,6 +181,39 @@ def _run_flow(
 
         finally:
             browser.close()
+
+
+async def async_run_five_digit_decoder(
+    state: str,
+    *,
+    data_path: Path | None = None,
+    delay_seconds: float = DEFAULT_DELAY_SECONDS,
+    headless: bool = True,
+) -> dict:
+    """
+    Async entrypoint for the five-digit decoder flow. Runs the sync Playwright
+    flow in a thread pool so the event loop is not blocked. Safe for many
+    parallel user sessions (each gets its own thread and browser instance).
+    """
+    if sync_playwright is None:
+        return {
+            "ok": False,
+            "error": "Playwright not installed. Run: pip install playwright && playwright install chromium",
+            "prefix_5": None,
+            "area": None,
+            "group": None,
+            "state": state,
+            "date_range_used": None,
+            "verified_range": None,
+        }
+    path = data_path or DEFAULT_DATA_PATH
+    return await asyncio.to_thread(
+        _run_flow,
+        state,
+        path,
+        delay_seconds,
+        headless,
+    )
 
 
 def main() -> int:
