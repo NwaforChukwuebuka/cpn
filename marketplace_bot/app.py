@@ -562,7 +562,6 @@ class BotRuntime:
                 f"🆔 Order ID: <code>{order['id']}</code>\n\n"
                 "We’re running the workflow now. We’ll notify you here when it’s done (or if it fails).\n\n"
                 "Use <b>My orders</b> to check status.",
-                reply_markup=_main_menu_keyboard(),
                 parse_mode="HTML",
             )
             await message.answer(
@@ -583,7 +582,6 @@ class BotRuntime:
         if not invoice_id or not checkout_url:
             await creating.edit_text(
                 "❌ Failed to create payment invoice. Please try again.",
-                reply_markup=_main_menu_keyboard(),
             )
             return
 

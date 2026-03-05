@@ -864,8 +864,12 @@ def _verify_advanced_to_next_step(
         return False
 
     def _check_hard_error() -> str | None:
-        """Return error message if a known hard error is visible, else None.
-        On step 3 all address-related errors are retryable, so returns None."""
+        """Return error message if a known hard error is visible on the current step, else None.
+        Only considers errors in the currently visible step so we do not treat next-step text
+        (e.g. step 3 'please check address') as a step 2 failure. Step 3 address errors are retryable."""
+        active_step = _get_active_step_num(page)
+        if active_step is not None and active_step != current_step_num:
+            return None
         current_scope = _get_step_scope(page, current_step_num)
         page_text_fragments: list[str] = []
         for err_sel in _ERROR_ELEMENT_SELECTORS:
@@ -943,9 +947,14 @@ def _verify_advanced_to_next_step(
         if attempt >= MAX_RETRIES:
             break
 
+        active_before_refill = _get_active_step_num(page)
+        if active_before_refill == expected_next_step_num:
+            _log(f"  Active step is already {active_before_refill}; treating as advanced.")
+            return None
+
         _log(f"  Form did not advance; reselecting options for this page, then retrying Continue ({attempt + 1}/{MAX_RETRIES})...")
 
-        # Re-apply this step's selections/inputs before clicking Continue again (do not just retry Continue).
+        # Re-apply this step's selections/inputs only if we are still on the current step.
         if current_step_spec and profile:
             if _step_markers_visible(page, current_step_spec, current_step_num):
                 if current_step_num == 3:
