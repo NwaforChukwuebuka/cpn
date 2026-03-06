@@ -204,7 +204,22 @@ def fill_step(
     # ready, which is why banking fails once and works on retry.
     if step_num == 7:
         try:
-            page.wait_for_selector("[data-testid='banking-section']", state="visible", timeout=15000)
+            wait_candidates = (
+                "[data-testid='banking-section']",
+                "#BANK_ACCOUNT-fieldset",
+                "#label-bankaccountsradio-radio-0",
+                "text=Do you have any bank accounts?",
+            )
+            wait_ok = False
+            for sel in wait_candidates:
+                try:
+                    page.wait_for_selector(sel, state="visible", timeout=5000)
+                    wait_ok = True
+                    break
+                except Exception:
+                    continue
+            if not wait_ok:
+                raise RuntimeError("no banking-section selector became visible")
             page.wait_for_timeout(600)
         except Exception as e:
             _log(f"  Warning: banking section wait: {e}")
@@ -297,8 +312,12 @@ def fill_step(
                                 clicked = True
                 if not clicked and not optional:
                     # Try visible label text first (only for required fields).
+                    label_pattern = re.compile(rf"^\s*{re.escape(label)}\s*$", re.I)
+                    if profile_key == "bank_account_type":
+                        # Capital One variants: "Checking & savings" vs "Checking And Savings".
+                        label_pattern = re.compile(r"^\s*Checking\s*(?:&|and)\s*Savings\s*$", re.I)
                     for loc_scope in (scope, page):
-                        label_loc = loc_scope.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
+                        label_loc = loc_scope.get_by_text(label_pattern)
                         if _count(label_loc) > 0:
                             _log(f"  Clicking visible label text '{label}'...")
                             try:
@@ -320,11 +339,14 @@ def fill_step(
                             clicked = True
                             break
                 if not clicked and not optional and profile_key == "bank_account_type" and "Checking" in label:
-                    # Banking step: Capital One may use different DOM; try role and data-testid.
+                    # Banking step: Capital One may use different DOM; try known variants first.
                     for fallback_loc in (
+                        page.locator("#label-bankaccountsradio-radio-0"),
+                        page.locator("label[for='bankaccountsradio-radio-0']"),
+                        page.locator("#bankaccountsradio-radio-0"),
                         page.locator("label[for='BANK_ACCOUNT:CAS']"),
                         page.locator("input[id='BANK_ACCOUNT:CAS']"),
-                        page.get_by_label(re.compile(r"Checking\s*&\s*savings", re.I)),
+                        page.get_by_label(re.compile(r"Checking\s*(?:&|and)\s*savings", re.I)),
                         page.locator("[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[id='BANK_ACCOUNT:CAS']"),
                     ):
                         try:
@@ -335,6 +357,25 @@ def fill_step(
                                     el.click()
                                 except Exception:
                                     el.click(force=True)
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+                if not clicked and not optional and profile_key == "bank_account_type":
+                    # Last resort: direct DOM click by known ids in variant pages.
+                    for el_id in ("label-bankaccountsradio-radio-0", "bankaccountsradio-radio-0", "BANK_ACCOUNT:CAS"):
+                        try:
+                            was_clicked = page.evaluate(
+                                """(id) => {
+                                    const el = document.getElementById(id);
+                                    if (!el) return false;
+                                    try { el.scrollIntoView({block: 'center', inline: 'nearest'}); } catch (_) {}
+                                    try { el.click(); return true; } catch (_) { return false; }
+                                }""",
+                                el_id,
+                            )
+                            if was_clicked:
+                                _log(f"  Clicking bank option via DOM id fallback: {el_id}")
                                 clicked = True
                                 break
                         except Exception:

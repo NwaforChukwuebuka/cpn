@@ -70,7 +70,7 @@
       "step": 7,
       "description": "Banking",
       "fields": [
-        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selectors": ["label[for='BANK_ACCOUNT:CAS']", "input[id='BANK_ACCOUNT:CAS']", "input[name='BANK_ACCOUNT'][id='BANK_ACCOUNT:CAS']", "[id='BANK_ACCOUNT:CAS']", "label:has-text('Checking & savings')", "[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[id='BANK_ACCOUNT:CAS']", "#BANK_ACCOUNT-fieldset input[id='BANK_ACCOUNT:CAS']", "[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[type='radio']", "#BANK_ACCOUNT-fieldset input[type='radio']"]},
+        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selectors": ["#label-bankaccountsradio-radio-0", "label#label-bankaccountsradio-radio-0", "label[for='bankaccountsradio-radio-0']", "#bankaccountsradio-radio-0", "label[for='BANK_ACCOUNT:CAS']", "input[id='BANK_ACCOUNT:CAS']", "input[name='BANK_ACCOUNT'][id='BANK_ACCOUNT:CAS']", "[id='BANK_ACCOUNT:CAS']", "label:has-text('Checking & savings')", "label:has-text('Checking And Savings')", "[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[id='BANK_ACCOUNT:CAS']", "#BANK_ACCOUNT-fieldset input[id='BANK_ACCOUNT:CAS']", "[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[type='radio']", "#BANK_ACCOUNT-fieldset input[type='radio']"]},
         {"profile_key": "cash_advance", "type": "radio", "label": "Yes", "selectors": ["label[for='CASH_ADVANCE:true']", "label[for='gravity-radio-cashadvance-radio-0']"]}
       ],
       "continue_button": "Continue",
