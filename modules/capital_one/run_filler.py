@@ -198,9 +198,20 @@ def fill_step(
     When skip_continue is True, used to re-apply selections/inputs before retrying Continue.
     """
     errors: list[str] = []
+    step_num = step_spec.get("step")
+    # Step 7 (Banking): wait for the banking section to be visible before resolving scope.
+    # On first run the DOM can still show step 6 after advancing; on retry the page is usually
+    # ready, which is why banking fails once and works on retry.
+    if step_num == 7:
+        try:
+            page.wait_for_selector("[data-testid='banking-section']", state="visible", timeout=15000)
+            page.wait_for_timeout(600)
+        except Exception as e:
+            _log(f"  Warning: banking section wait: {e}")
+
     # Track filled by (profile_key, field_id) so the same value can fill multiple fields (e.g. SSN + Confirm SSN).
     filled: set[tuple[str, str]] = set()
-    scope = _get_step_scope(page, step_spec.get("step"))
+    scope = _get_step_scope(page, step_num)
 
     for field_spec in step_spec.get("fields", []):
         profile_key = field_spec.get("profile_key")
