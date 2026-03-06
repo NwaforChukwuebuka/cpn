@@ -240,6 +240,7 @@ def fill_step(
                 # Prefer explicit selector(s) from steps.json for styled radios.
                 clicked = False
                 selectors = field_spec.get("selectors") or ([field_spec.get("selector")] if field_spec.get("selector") else [])
+                selector_click_error = None
                 for sel in selectors:
                     if not sel:
                         continue
@@ -248,13 +249,32 @@ def fill_step(
                         loc = page.locator(sel)
                     if _count(loc) > 0:
                         _log(f"  Clicking radio via selector: {sel}")
-                        first = loc.first
+                        candidates = []
                         try:
-                            first.click()
+                            visible_loc = loc.locator(":visible")
+                            if _count(visible_loc) > 0:
+                                candidates.append(visible_loc.first)
                         except Exception:
-                            first.click(force=True)
-                        clicked = True
-                        break
+                            pass
+                        candidates.append(loc.first)
+                        for candidate in candidates:
+                            try:
+                                try:
+                                    candidate.scroll_into_view_if_needed(timeout=1500)
+                                except Exception:
+                                    pass
+                                try:
+                                    candidate.click(timeout=3000)
+                                except Exception:
+                                    candidate.click(force=True, timeout=3000)
+                                clicked = True
+                                break
+                            except Exception as e:
+                                selector_click_error = e
+                                continue
+                        if clicked:
+                            break
+                        _log(f"  Warning: selector found but click failed: {sel}")
                 if not clicked and optional:
                     # Optional step-2 "either/or" question: find by question text, then click our answer.
                     # Ensures we answer whichever second question is shown (mandatory for Continue).
@@ -302,9 +322,10 @@ def fill_step(
                 if not clicked and not optional and profile_key == "bank_account_type" and "Checking" in label:
                     # Banking step: Capital One may use different DOM; try role and data-testid.
                     for fallback_loc in (
-                        page.get_by_role("radio", name=re.compile(r"Checking\s*&\s*savings", re.I)),
-                        page.locator("[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[type='radio']").first,
-                        page.locator("#BANK_ACCOUNT-fieldset input[type='radio']").first,
+                        page.locator("label[for='BANK_ACCOUNT:CAS']"),
+                        page.locator("input[id='BANK_ACCOUNT:CAS']"),
+                        page.get_by_label(re.compile(r"Checking\s*&\s*savings", re.I)),
+                        page.locator("[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[id='BANK_ACCOUNT:CAS']"),
                     ):
                         try:
                             if _count(fallback_loc) > 0:
@@ -322,6 +343,8 @@ def fill_step(
                     if optional:
                         _log(f"  (question not present, skipping)")
                         continue
+                    if selector_click_error:
+                        _log(f"  Last radio click error: {selector_click_error}")
                     raise RuntimeError(f"Could not click radio option '{label}'")
                 filled.add((profile_key, field_id))
                 _log(f"  Selected '{label}'.")
