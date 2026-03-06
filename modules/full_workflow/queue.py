@@ -155,8 +155,10 @@ class FullWorkflowQueueService:
         profile_base_slots: list[int] | None = None,
         on_job_done: Callable[[WorkflowJobRecord], Awaitable[None] | None] | None = None,
         on_progress: Callable[[WorkflowJobRecord, str], Awaitable[None]] | None = None,
+        get_checkpoint_fallback_keys: Callable[[str, str], Awaitable[list[str]]] | None = None,
     ) -> None:
         self._template = dict(template)
+        self._get_checkpoint_fallback_keys = get_checkpoint_fallback_keys
         self._capital_one_steps = dict(capital_one_steps)
         self._first_premier_steps = dict(first_premier_steps)
         self._concurrency_limit = max(1, int(concurrency_limit))
@@ -277,6 +279,19 @@ class FullWorkflowQueueService:
                     except Exception as exc:
                         print(f"[WFQ][job={record.job_id}] on_progress failed: {type(exc).__name__}: {exc}")
 
+            # Use order_id for checkpoint so retries resume from last completed step (not new job_id)
+            metadata = record.request.metadata or {}
+            order_id = metadata.get("order_id")
+            checkpoint_key = str(order_id or record.job_id)
+            checkpoint_fallback_keys: list[str] = []
+            if order_id and self._get_checkpoint_fallback_keys is not None:
+                try:
+                    checkpoint_fallback_keys = await self._get_checkpoint_fallback_keys(
+                        str(order_id), record.job_id
+                    )
+                except Exception as exc:
+                    print(f"[WFQ][job={record.job_id}] get_checkpoint_fallback_keys failed: {type(exc).__name__}: {exc}")
+
             result = await run_full_workflow_resilient_async(
                 job_id=record.job_id,
                 state=record.request.state,
@@ -296,6 +311,8 @@ class FullWorkflowQueueService:
                 adspower_step_gate=self._adspower_gate,
                 checkpoint_store=self._checkpoint_store,
                 resume_from_checkpoint=self._resume_from_checkpoint,
+                checkpoint_key=checkpoint_key,
+                checkpoint_fallback_keys=checkpoint_fallback_keys if checkpoint_fallback_keys else None,
             )
 
             record.result = result

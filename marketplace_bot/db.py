@@ -293,6 +293,26 @@ class SupabaseRepo:
 
         return await asyncio.to_thread(_op)
 
+    async def get_workflow_job_ids_for_order(
+        self, order_id: str, exclude_job_id: str | None = None, limit: int = 5
+    ) -> list[str]:
+        """Get job_ids for an order (most recent first), for checkpoint fallback. Excludes exclude_job_id."""
+        def _op() -> list[str]:
+            resp = (
+                self._client.table("workflow_jobs")
+                .select("job_id")
+                .eq("order_id", order_id)
+                .order("created_at", desc=True)
+                .limit(limit + 10)  # fetch extra in case we exclude some
+                .execute()
+            )
+            ids = [r["job_id"] for r in (resp.data or []) if r.get("job_id")]
+            if exclude_job_id:
+                ids = [j for j in ids if j != exclude_job_id]
+            return ids[:limit]
+
+        return await asyncio.to_thread(_op)
+
     async def update_workflow_job(
         self,
         *,

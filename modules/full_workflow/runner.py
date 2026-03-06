@@ -137,6 +137,8 @@ async def run_full_workflow_resilient_async(
     adspower_step_gate: AdspowerStepGate | None = None,
     checkpoint_store: WorkflowCheckpointStore | None = None,
     resume_from_checkpoint: bool = True,
+    checkpoint_key: str | None = None,
+    checkpoint_fallback_keys: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Resilient workflow runner for high-volume bots.
@@ -170,12 +172,16 @@ async def run_full_workflow_resilient_async(
             except Exception:
                 pass
 
+    # Use order_id for checkpoint when retrying (same order = resume from last step)
+    _ck = (checkpoint_key or job_id) if checkpoint_key or job_id else None
+    _ck_fallbacks = list(checkpoint_fallback_keys or [])
+
     async def _save_checkpoint(result_obj: dict[str, Any], last_completed: str | None) -> None:
-        if checkpoint_store is None or not job_id:
+        if checkpoint_store is None or not _ck:
             return
         try:
             await checkpoint_store.save(
-                job_id,
+                _ck,
                 {
                     "job_id": job_id,
                     "last_completed": last_completed,
@@ -202,13 +208,19 @@ async def run_full_workflow_resilient_async(
         "job_id": job_id,
     }
 
-    # Optional resume path from checkpoint.
-    if resume_from_checkpoint and checkpoint_store is not None and job_id:
-        try:
-            saved = await checkpoint_store.load(job_id)
-        except Exception as exc:
-            _log(f"checkpoint load warning: {type(exc).__name__}: {exc}")
-            saved = None
+    # Optional resume path from checkpoint (use order_id for retries so we resume from last step).
+    # Try primary key first, then fallbacks (e.g. previous job_id from runs before order_id fix).
+    if resume_from_checkpoint and checkpoint_store is not None and (_ck or _ck_fallbacks):
+        saved = None
+        keys_to_try = ([_ck] if _ck else []) + [k for k in _ck_fallbacks if k and k != _ck]
+        for key in keys_to_try:
+            try:
+                saved = await checkpoint_store.load(key)
+                if saved and isinstance(saved, dict):
+                    _log(f"Resuming from checkpoint ({key[:16]}...), last_completed={saved.get('last_completed')}")
+                    break
+            except Exception as exc:
+                _log(f"checkpoint load warning for {key[:16]}...: {type(exc).__name__}: {exc}")
         if saved and isinstance(saved, dict):
             saved_result = saved.get("result")
             saved_last = saved.get("last_completed")

@@ -586,15 +586,17 @@ def _verify_address_content(page, profile: dict, scope, step_spec: dict) -> tupl
 
 def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int = 0) -> bool:
     """
-    On address step (3), clear and refill the full address before retrying Continue.
-
-    On attempt >= 2 (3rd/4th retry): for street with google_autocomplete, use focus-only —
-    click field to trigger autocomplete without typing (avoids duplication like "33330 Whitmire Rd30...").
+    On address step (3), clear and refill zip, city, state only. Leave street/line2 untouched
+    to avoid duplication (e.g. "austinaustin", "1123 main st23 main st...").
+    For street: focus only (as if about to type) but do nothing — avoids corrupting existing value.
     Capital One sometimes switches DOM variants; tries original selectors then address.residential.* IDs.
     """
-    _log("  Refilling full address before retry...")
+    _log("  Refilling address (zip, city, state only; street left untouched)...")
     refilled_any = False
     scope = _get_step_scope(page, 3)
+
+    # Skip street and line2 — they cause duplication when cleared/refilled
+    _SKIP_ADDRESS_KEYS = frozenset(("address.street", "address.line2"))
 
     # Mapping from profile-key suffix → Capital One's alternative ID suffix
     _ALT_ID_MAP = {
@@ -636,10 +638,10 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
 
         return None
 
-    # ── Pass 1: clear every address field ─────────────────────────────────────
+    # ── Pass 1: clear zip, city, state only (skip street, line2) ─────────────────
     for field_spec in step_spec.get("fields", []):
         profile_key = field_spec.get("profile_key") or ""
-        if not profile_key.startswith("address."):
+        if not profile_key.startswith("address.") or profile_key in _SKIP_ADDRESS_KEYS:
             continue
         try:
             loc = _find_field_locator(field_spec)
@@ -655,8 +657,6 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
                 except Exception:
                     pass
             else:
-                # Use JS to wipe the value and fire the input/change events so
-                # Angular/React state syncs; avoids click() which causes scroll-jitter.
                 first.evaluate(
                     "el => {"
                     "  el.value = '';"
@@ -671,17 +671,10 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
 
     page.wait_for_timeout(600)  # let Angular re-validate after clearing
 
-    # ── Pass 2: refill every address field from profile ────────────────────────
+    # ── Pass 2: refill zip, city, state; for street/line2: focus only, do nothing ─
     for field_spec in step_spec.get("fields", []):
         profile_key = field_spec.get("profile_key") or ""
         if not profile_key.startswith("address."):
-            continue
-
-        value = get_profile_value(profile, profile_key)
-        if value is None:
-            continue
-        value_str = str(value).strip()
-        if not value_str:
             continue
 
         try:
@@ -692,6 +685,21 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
             first = loc.first
             first.wait_for(state="visible", timeout=5000)
 
+            if profile_key in _SKIP_ADDRESS_KEYS:
+                # Street/line2: focus only (as if about to type) but do nothing — avoid duplication
+                first.click()
+                page.wait_for_timeout(200)
+                _log(f"  Touched {profile_key} (no change).")
+                refilled_any = True
+                continue
+
+            value = get_profile_value(profile, profile_key)
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if not value_str:
+                continue
+
             is_select = first.evaluate("el => el.tagName === 'SELECT'")
             if is_select:
                 first.select_option(value=value_str)
@@ -701,74 +709,6 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
                     " : '(none)'"
                 )
                 _log(f"  Refilled {profile_key}: {selected}")
-            elif field_spec.get("google_autocomplete"):
-                first.evaluate(
-                    "el => {"
-                    "  el.value = '';"
-                    "  el.dispatchEvent(new Event('input', {bubbles:true}));"
-                    "}"
-                )
-                page.wait_for_timeout(300)
-                if attempt >= 2:
-                    # 3rd/4th retry: focus only (no typing) — triggers cached autocomplete, avoids duplication
-                    _log(f"  Focus-only on street (attempt {attempt + 1}) to trigger autocomplete...")
-                    first.click()
-                    page.wait_for_timeout(500)
-                    pac = page.locator(".pac-container .pac-item")
-                    try:
-                        pac.first.wait_for(state="visible", timeout=4000)
-                        count = _count(pac)
-                        street_lower = value_str.lower()
-                        street_key = " ".join(value_str.split()[:3]).lower()
-                        clicked = False
-                        for i in range(count):
-                            item = pac.nth(i)
-                            try:
-                                text = (item.inner_text() or "").lower()
-                                if street_key[:20] in text or street_lower[:15] in text:
-                                    item.click()
-                                    clicked = True
-                                    _log(f"  Selected autocomplete: {text[:50]}...")
-                                    break
-                            except Exception:
-                                continue
-                        if not clicked and count > 0:
-                            pac.first.click()
-                            clicked = True
-                        if clicked:
-                            page.wait_for_timeout(500)
-                            _log(f"  Refilled {profile_key} via focus-triggered autocomplete.")
-                        else:
-                            raise Exception("no matching suggestion")
-                    except Exception:
-                        _log(f"  No autocomplete on focus; falling back to typing.")
-                        first.type(value_str, delay=60)
-                        pac = page.locator(".pac-container .pac-item")
-                        try:
-                            pac.first.wait_for(state="visible", timeout=6000)
-                            pac.first.click()
-                            page.wait_for_timeout(500)
-                            _log(f"  Refilled {profile_key} via typed autocomplete.")
-                        except Exception:
-                            _log(f"  Warning: no autocomplete for {profile_key}; using typed text.")
-                            try:
-                                first.press("Escape")
-                            except Exception:
-                                pass
-                else:
-                    first.type(value_str, delay=60)
-                    pac = page.locator(".pac-container .pac-item")
-                    try:
-                        pac.first.wait_for(state="visible", timeout=6000)
-                        pac.first.click()
-                        page.wait_for_timeout(500)
-                        _log(f"  Refilled {profile_key} via autocomplete.")
-                    except Exception:
-                        _log(f"  Warning: no autocomplete for {profile_key}; using typed text.")
-                        try:
-                            first.press("Escape")
-                        except Exception:
-                            pass
             else:
                 first.fill(value_str)
                 _log(f"  Refilled {profile_key}: {value_str}")

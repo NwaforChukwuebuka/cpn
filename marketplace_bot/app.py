@@ -137,6 +137,13 @@ class BotRuntime:
         self.first_premier_steps = json.loads(fp_steps_path.read_text(encoding="utf-8"))
 
         checkpoint_store = FileWorkflowCheckpointStore(ROOT / "data" / "workflow_checkpoints")
+
+        async def _get_checkpoint_fallback_keys(order_id: str, current_job_id: str) -> list[str]:
+            """Return previous job_ids for this order so retries can load checkpoint from old runs."""
+            return await self.repo.get_workflow_job_ids_for_order(
+                order_id, exclude_job_id=current_job_id, limit=5
+            )
+
         self.workflow_queue = FullWorkflowQueueService(
             template=self.default_profile_template,
             capital_one_steps=self.capital_one_steps,
@@ -146,6 +153,7 @@ class BotRuntime:
             checkpoint_store=checkpoint_store,
             on_job_done=self.on_job_done,
             on_progress=self._on_workflow_progress,
+            get_checkpoint_fallback_keys=_get_checkpoint_fallback_keys,
         )
 
         self._setup_handlers()
