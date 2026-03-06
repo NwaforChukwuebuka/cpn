@@ -70,8 +70,8 @@
       "step": 7,
       "description": "Banking",
       "fields": [
-        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selector": "label[for='BANK_ACCOUNT:CAS']"},
-        {"profile_key": "cash_advance", "type": "radio", "label": "Yes", "selector": "label[for='CASH_ADVANCE:true']"}
+        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selectors": ["label[for='BANK_ACCOUNT:CAS']", "label[for='gravity-radio-bankaccount-radio-0']", "label:has-text('Checking & savings')"]},
+        {"profile_key": "cash_advance", "type": "radio", "label": "Yes", "selectors": ["label[for='CASH_ADVANCE:true']", "label[for='gravity-radio-cashadvance-radio-0']"]}
       ],
       "continue_button": "Continue",
       "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"

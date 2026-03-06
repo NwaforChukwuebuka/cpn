@@ -657,13 +657,18 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
                 except Exception:
                     pass
             else:
-                first.evaluate(
-                    "el => {"
-                    "  el.value = '';"
-                    "  el.dispatchEvent(new Event('input',  {bubbles:true}));"
-                    "  el.dispatchEvent(new Event('change', {bubbles:true}));"
-                    "}"
-                )
+                # Use Playwright clear() for text inputs to avoid Angular/React duplication
+                # (el.value = '' + fill can append on some custom components)
+                try:
+                    first.clear()
+                except Exception:
+                    first.evaluate(
+                        "el => {"
+                        "  el.value = '';"
+                        "  el.dispatchEvent(new Event('input',  {bubbles:true}));"
+                        "  el.dispatchEvent(new Event('change', {bubbles:true}));"
+                        "}"
+                    )
             _log(f"  Cleared {profile_key}.")
         except Exception as e:
             _log(f"  Warning: could not clear {profile_key}: {e}")
@@ -710,6 +715,11 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int 
                 )
                 _log(f"  Refilled {profile_key}: {selected}")
             else:
+                # Clear before fill to avoid duplication (e.g. austinaustin) on Angular forms
+                try:
+                    first.clear()
+                except Exception:
+                    pass
                 first.fill(value_str)
                 _log(f"  Refilled {profile_key}: {value_str}")
 
