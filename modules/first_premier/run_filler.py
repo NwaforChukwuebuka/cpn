@@ -484,6 +484,12 @@ def _run_filler_core(
                 ctx.set_default_navigation_timeout(nav_timeout_ms)
                 ctx.set_default_timeout(step_timeout_ms)
 
+                # Force desktop viewport so Apply Now is visible (responsive layout hides it on mobile)
+                try:
+                    page.set_viewport_size({"width": 1280, "height": 720})
+                except Exception:
+                    pass
+
                 _log(f"Navigating to {main_url}...")
                 try:
                     page.goto(main_url, wait_until="load")
@@ -498,12 +504,18 @@ def _run_filler_core(
                     for sel in apply_selectors:
                         try:
                             loc = page.locator(sel)
-                            if _count(loc) > 0:
-                                loc.first.wait_for(state="visible", timeout=8000)
-                                loc.first.click()
-                                apply_clicked = True
-                                _log(f"Clicked Apply Now via: {sel[:50]}...")
-                                break
+                            if _count(loc) == 0:
+                                continue
+                            first = loc.first
+                            try:
+                                first.wait_for(state="visible", timeout=8000)
+                                first.click()
+                            except Exception:
+                                # Element found but hidden (responsive layout); force click
+                                first.click(force=True)
+                            apply_clicked = True
+                            _log(f"Clicked Apply Now via: {sel[:50]}...")
+                            break
                         except Exception as e:
                             _log(f"  Selector failed {sel[:40]}: {e}")
                             continue
