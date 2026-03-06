@@ -1169,6 +1169,9 @@ def _save_agreement_page_html(page, save_dir: Path | None) -> None:
 def _check_agreement_boxes(page) -> list[str]:
     """
     On the agreement page (after step 8), check the two required authorization checkboxes.
+    The checkboxes live inside the "Agreements" accordion, which is collapsed by default
+    (section has visibility:hidden). We expand it first, then check the boxes (using
+    force=True in case the native input is styled hidden).
     Note: communication language defaults to English and is intentionally left unchanged.
     """
     errors: list[str] = []
@@ -1178,9 +1181,23 @@ def _check_agreement_boxes(page) -> list[str]:
     ]
 
     _log("Waiting for agreement page checkboxes...")
-    first_box = page.locator(f'input[type="checkbox"]#{required_boxes[0][1]}')
+    # Agreements are inside an accordion; expand it so the checkboxes are in a visible section
+    accordion_btn = page.locator("#authorizations-title").first
     try:
-        first_box.first.wait_for(state="visible", timeout=30000)
+        accordion_btn.wait_for(state="visible", timeout=15000)
+        if accordion_btn.get_attribute("aria-expanded") != "true":
+            _log("  Expanding Agreements accordion...")
+            accordion_btn.click()
+            page.wait_for_timeout(500)
+    except Exception as e:
+        msg = f"Agreement accordion not ready: {e}"
+        _log(f"  ERROR: {msg}")
+        return [msg]
+
+    # Wait for first checkbox to be present (may stay "hidden" due to custom styling)
+    first_box = page.locator(f'input[type="checkbox"]#{required_boxes[0][1]}').first
+    try:
+        first_box.wait_for(state="attached", timeout=10000)
     except Exception as e:
         msg = f"Agreement page did not become ready: {e}"
         _log(f"  ERROR: {msg}")
@@ -1192,7 +1209,7 @@ def _check_agreement_boxes(page) -> list[str]:
             if _count(loc) == 0:
                 raise RuntimeError(f"Checkbox #{box_id} not found")
             box = loc.first
-            box.wait_for(state="visible", timeout=7000)
+            box.wait_for(state="attached", timeout=5000)
             if box.is_checked():
                 _log(f"  {label}: already checked.")
                 continue
