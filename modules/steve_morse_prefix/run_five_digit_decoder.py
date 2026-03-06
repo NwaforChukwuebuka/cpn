@@ -54,8 +54,15 @@ DEFAULT_DELAY_SECONDS = 20
 RATE_LIMIT_PHRASES = ("unexplained error", "please notify me")
 MAX_REFRESH_RETRIES = 2
 REFRESH_WAIT_AFTER_SECONDS = 15
+# When returning due to rate limit: save screenshot and keep browser open this many seconds for troubleshooting
+RATE_LIMIT_TROUBLESHOOT_SECONDS = 300
 DEFAULT_ADSPOWER_API = "http://127.0.0.1:50325"
 DEFAULT_REFRESH_HOST = "127.0.0.1:20725"
+LOG_PREFIX = "[Steve Morse]"
+
+
+def _log(msg: str) -> None:
+    print(f"{LOG_PREFIX} {msg}", flush=True)
 
 
 def _is_rate_limited(text: str) -> bool:
@@ -283,12 +290,31 @@ def _run_flow(
                             break
                         # No "Not Issued" for this area; try next area
 
-                    if hit_rate_limit and adspower_profile and refresh_attempt < MAX_REFRESH_RETRIES and rotate_ip_sync:
-                        ok = rotate_ip_sync(adspower_profile, headless=True, host=refresh_host)
-                        if ok:
-                            time.sleep(REFRESH_WAIT_AFTER_SECONDS)
-                            continue
+                    if hit_rate_limit and adspower_profile and refresh_attempt < MAX_REFRESH_RETRIES:
+                        if rotate_ip_sync is None:
+                            _log("Rate limit hit. IP refresh skipped: adspower_refresh module not available.")
+                        else:
+                            _log(f"Rate limit hit. Attempting IP refresh for profile {adspower_profile} (host={refresh_host})...")
+                            ok = rotate_ip_sync(adspower_profile, headless=True, host=refresh_host)
+                            if ok:
+                                _log("IP refresh succeeded. Waiting then retrying...")
+                                time.sleep(REFRESH_WAIT_AFTER_SECONDS)
+                                continue
+                            else:
+                                _log("IP refresh failed (refresh button not found or error). Check AdsPower refresh page at https://start.adspower.net/")
                     if hit_rate_limit:
+                        # Screenshot and keep browser open for visual troubleshooting
+                        try:
+                            screenshot_dir = Path.cwd() / "data"
+                            screenshot_dir.mkdir(parents=True, exist_ok=True)
+                            timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+                            screenshot_path = screenshot_dir / f"steve_morse_rate_limit_{timestamp}.png"
+                            page.screenshot(path=str(screenshot_path))
+                            _log(f"Screenshot saved: {screenshot_path}")
+                        except Exception as e:
+                            _log(f"Could not save screenshot: {e}")
+                        _log(f"Keeping browser open for {RATE_LIMIT_TROUBLESHOOT_SECONDS}s for troubleshooting...")
+                        time.sleep(RATE_LIMIT_TROUBLESHOOT_SECONDS)
                         err = f"Server returned rate-limit style message: {last_result_text!r}. Use --adspower-profile and refresh to rotate IP and retry."
                         return {
                             "ok": False,
