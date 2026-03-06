@@ -16,8 +16,8 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 # City: letters, spaces, hyphens, apostrophes; 1–50 chars
 _CITY_RE = re.compile(r"^[a-zA-Z\s\-']{1,50}$")
 
-# ZIP: 5 digits, or 5+4 with optional dash, or 9 consecutive digits
-_ZIP_RE = re.compile(r"^(\d{5}(-\d{4})?|\d{9})$")
+# ZIP: 5 digits only
+_ZIP_RE = re.compile(r"^\d{5}$")
 
 # DOB: MM/DD/YYYY
 _DOB_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
@@ -84,9 +84,19 @@ def validate_street(text: str) -> tuple[bool, str | None]:
         return False, "Street address is too short (e.g. 123 Main St)."
     if len(s) > 100:
         return False, "Street address is too long (max 100 characters)."
+    # Reject full-address lookalikes
+    if s.count(",") >= 2:
+        return False, "Enter street address only. Do not include city, state, or ZIP."
+    # State code pattern: ", TX" or ", CA" etc.
+    for abbr in STATE_ABBR_TO_FULL:
+        if re.search(r",\s*" + re.escape(abbr) + r"\b", s, re.IGNORECASE):
+            return False, "Enter street address only. Do not include city, state, or ZIP."
+    # ZIP pattern: comma + 5 digits, or 5 digits at end
+    if re.search(r",\s*\d{5}\s*$", s) or re.search(r"\s\d{5}\s*$", s):
+        return False, "Enter street address only. Do not include city, state, or ZIP."
     # Allow letters, numbers, spaces, comma, period, #, -, '
     if not re.match(r"^[a-zA-Z0-9\s,.#'\-]+$", s):
-        return False, "Street can only contain letters, numbers, spaces, and basic punctuation (e.g. 123 Main St, Apt 4)."
+        return False, "Street can only contain letters, numbers, spaces, and basic punctuation (e.g. 123 Main St)."
     return True, None
 
 
@@ -118,13 +128,12 @@ def validate_state(text: str) -> tuple[bool, str | None]:
 
 def validate_zip(text: str) -> tuple[bool, str | None]:
     s = (text or "").strip()
-    # Allow "12345" or "12345-6789"
     if not s:
         return False, "ZIP code cannot be empty."
     # Remove spaces
     s = s.replace(" ", "")
     if not _ZIP_RE.match(s):
-        return False, "ZIP must be 5 digits, or 5+4 with or without dash (e.g. 77864 or 77864-1234)."
+        return False, "ZIP must be exactly 5 digits (e.g. 77864)."
     return True, None
 
 

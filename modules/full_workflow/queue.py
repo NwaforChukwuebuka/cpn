@@ -251,7 +251,7 @@ class FullWorkflowQueueService:
         # Notify user that processing has started (first progress message).
         if self._on_progress is not None:
             try:
-                await self._on_progress(record, "⏳ Processing your order...")
+                await self._on_progress(record, "🚀 Starting automation — 0%")
             except Exception as exc:
                 print(f"[WFQ][job={record.job_id}] on_progress (start) failed: {type(exc).__name__}: {exc}")
 

@@ -22,6 +22,7 @@ from aiogram.types import ErrorEvent
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     BufferedInputFile,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
@@ -194,6 +195,7 @@ class BotRuntime:
         self.router.message.register(self.capture_zip, OrderStates.zip)
         self.router.message.register(self.capture_dob, OrderStates.date_of_birth)
         self.router.message.register(self.capture_retry_phone, RetryStates.retry_phone)
+        self.router.callback_query.register(self.handle_csv_download, F.data.startswith("csv:"))
 
     async def handle_start(self, message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -260,8 +262,8 @@ class BotRuntime:
                 parse_mode="HTML",
             )
             return
-        order = await self.repo.get_latest_order_for_user(user["id"])
-        if not order:
+        orders = await self.repo.get_orders_for_user(user["id"], limit=10)
+        if not orders:
             await message.answer(
                 "📦 You don’t have any orders yet.\n\nUse <b>Create order</b> to place your first order.",
                 reply_markup=_main_menu_keyboard(),
@@ -274,27 +276,66 @@ class BotRuntime:
             "processing": "🔄",
             "completed": "✅",
             "failed": "❌",
-        }.get(order["status"], "•")
-        status_label = order["status"].replace("_", " ").title()
-        is_failed = order["status"] == "failed"
-        cpns_paid = int(order.get("cpns_paid") or 1)
-        cpns_delivered = int(order.get("cpns_delivered") or 0)
-        body = (
-            f"📦 <b>Latest order</b>\n\n"
-            f"{status_emoji} <b>Status:</b> {status_label}\n"
-            f"🆔 <b>Order ID:</b> <code>{order['id']}</code>\n"
-        )
-        if cpns_paid > 1:
-            body += f"\n📄 CPNs: {cpns_delivered}/{cpns_paid} delivered.\n"
+        }
+        lines = ["📦 <b>Your orders</b>\n"]
+        inline_buttons: list[list[InlineKeyboardButton]] = []
+        is_failed = any(o["status"] == "failed" for o in orders)
+        for order in orders:
+            emoji = status_emoji.get(order["status"], "•")
+            label = order["status"].replace("_", " ").title()
+            cpns_paid = int(order.get("cpns_paid") or 1)
+            cpns_delivered = int(order.get("cpns_delivered") or 0)
+            lines.append(f"{emoji} <b>{order['id'][:8]}…</b> — {label}")
+            if cpns_paid > 1:
+                lines.append(f"   CPNs: {cpns_delivered}/{cpns_paid}")
+            csv_path = order.get("result_csv_path")
+            if order["status"] == "completed" and csv_path:
+                inline_buttons.append([
+                    InlineKeyboardButton(
+                        text=f"📥 Download CSV ({order['id'][:8]}…)",
+                        callback_data=f"csv:{order['id']}",
+                    )
+                ])
+        body = "\n".join(lines)
         if is_failed:
-            body += "\nYou can retry this order without paying again. Use <b>Retry</b> below."
+            body += "\n\nYou can retry failed orders. Use <b>Retry</b> below."
         else:
             body += "\n\nNeed another? Use <b>Create order</b>."
-        await message.answer(
-            body,
-            reply_markup=_main_menu_keyboard(show_retry=is_failed),
-            parse_mode="HTML",
-        )
+        reply_markup: ReplyKeyboardMarkup | InlineKeyboardMarkup = _main_menu_keyboard(show_retry=is_failed)
+        if inline_buttons:
+            reply_markup = InlineKeyboardMarkup(inline_keyboard=inline_buttons)
+        await message.answer(body, reply_markup=reply_markup, parse_mode="HTML")
+        if inline_buttons:
+            await message.answer(
+                "Use the menu below for other actions.",
+                reply_markup=_main_menu_keyboard(show_retry=is_failed),
+                parse_mode="HTML",
+            )
+
+    async def handle_csv_download(self, callback: CallbackQuery) -> None:
+        """Send CSV file when user clicks Download CSV button."""
+        await callback.answer()
+        order_id = (callback.data or "").removeprefix("csv:")
+        if not order_id:
+            return
+        user = await self.repo.get_user_by_telegram_id(callback.from_user.id)  # type: ignore[arg-type]
+        if not user:
+            await callback.message.answer("You don't have any orders.")
+            return
+        order = await self.repo.get_order_by_id(order_id)
+        if not order or str(order.get("user_id")) != str(user["id"]):
+            await callback.message.answer("Order not found or access denied.")
+            return
+        csv_path = order.get("result_csv_path")
+        if not csv_path or order.get("status") != "completed":
+            await callback.message.answer("CSV not available for this order.")
+            return
+        path = ROOT / csv_path if not Path(csv_path).is_absolute() else Path(csv_path)
+        if not path.exists():
+            await callback.message.answer("CSV file no longer available.")
+            return
+        doc = BufferedInputFile(path.read_bytes(), filename=f"cpn_{order_id}.csv")
+        await callback.message.answer_document(doc)
 
     async def handle_retry(self, message: Message, state: FSMContext) -> None:
         """Retry a failed paid order without requiring a new payment."""
@@ -482,7 +523,7 @@ class BotRuntime:
         await state.set_state(OrderStates.street)
         await message.answer(
             f"Step <b>5/{ORDER_STEP_TOTAL}</b> — <b>Street address</b>\n"
-            "Full street address (e.g. 123 Main St, Apt 4):",
+            "Street address only (e.g. 123 Main St). Do not include city, state, or ZIP.",
             parse_mode="HTML",
         )
 
@@ -492,7 +533,7 @@ class BotRuntime:
         if not ok:
             await message.answer(
                 f"❌ {err}\n\nStep <b>5/{ORDER_STEP_TOTAL}</b> — <b>Street address</b>\n"
-                "Enter full street address (e.g. 123 Main St, Apt 4):",
+                "Street address only (e.g. 123 Main St). Do not include city, state, or ZIP.",
                 parse_mode="HTML",
             )
             return
@@ -545,7 +586,7 @@ class BotRuntime:
         await state.set_state(OrderStates.zip)
         await message.answer(
             f"Step <b>8/{ORDER_STEP_TOTAL}</b> — <b>ZIP code</b>\n"
-            "ZIP or postal code (5 digits, or 5+4):",
+            "ZIP code (5 digits):",
             parse_mode="HTML",
         )
 
@@ -555,7 +596,7 @@ class BotRuntime:
         if not ok:
             await message.answer(
                 f"❌ {err}\n\nStep <b>8/{ORDER_STEP_TOTAL}</b> — <b>ZIP code</b>\n"
-                "Enter 5 digits or 5+4 (e.g. 77864 or 77864-1234):",
+                "Enter 5 digits (e.g. 77864):",
                 parse_mode="HTML",
             )
             return

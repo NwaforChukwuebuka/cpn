@@ -221,6 +221,23 @@ class SupabaseRepo:
 
         return await asyncio.to_thread(_op)
 
+    async def get_orders_for_user(
+        self, user_id: str, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        """Get orders for a user, newest first."""
+        def _op() -> list[dict[str, Any]]:
+            resp = (
+                self._client.table("orders")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return resp.data or []
+
+        return await asyncio.to_thread(_op)
+
     async def insert_payment(
         self,
         *,

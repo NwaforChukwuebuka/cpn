@@ -110,11 +110,11 @@ async def _run_step_with_retries(
 
 
 # User-facing progress labels (for non-technical users)
-PROGRESS_GETTING_CPN = "⏳ Getting your CPN..."
-PROGRESS_VALIDATING_CPN = "⏳ Validating your CPN..."
-PROGRESS_BUILDING_PROFILE = "⏳ Building your profile..."
-PROGRESS_APPLICATION_STEP_1 = "⏳ Completing your application (step 1 of 2)..."
-PROGRESS_APPLICATION_STEP_2 = "⏳ Completing your application (step 2 of 2)..."
+PROGRESS_GETTING_CPN = "1️⃣ Creating your CPN — 20%"
+PROGRESS_VALIDATING_CPN = "2️⃣ Validating your CPN — 40%"
+PROGRESS_BUILDING_PROFILE = "3️⃣ Building your credit profile — 60%"
+PROGRESS_APPLICATION_STEP_1 = "4️⃣ Trimerge with Capital One Credit Card — 80%"
+PROGRESS_APPLICATION_STEP_2 = "5️⃣ Trimerge with First Premier Credit — 100%"
 
 
 async def run_full_workflow_resilient_async(
