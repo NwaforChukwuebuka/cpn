@@ -56,6 +56,9 @@ MAX_REFRESH_RETRIES = 2
 REFRESH_WAIT_AFTER_SECONDS = 15
 # When returning due to rate limit: save screenshot and keep browser open this many seconds for troubleshooting
 RATE_LIMIT_TROUBLESHOOT_SECONDS = 300
+# MobileHop proxy reset: open in new tab when rate limited; page may show error but IP is changed. Wait then reload first tab.
+DEFAULT_IP_RESET_URL = "https://portal.mobilehop.com/proxies/6438d27add2d4134b4fd835110e39664/reset"
+IP_RESET_WAIT_SECONDS = 12  # Page says "Please wait 4-10 seconds"
 DEFAULT_ADSPOWER_API = "http://127.0.0.1:50325"
 DEFAULT_REFRESH_HOST = "127.0.0.1:20725"
 LOG_PREFIX = "[Steve Morse]"
@@ -71,6 +74,29 @@ def _is_rate_limited(text: str) -> bool:
         return False
     lower = text.lower()
     return any(phrase in lower for phrase in RATE_LIMIT_PHRASES)
+
+
+def _refresh_ip_via_reset_url(page, ip_reset_url: str, wait_seconds: int = IP_RESET_WAIT_SECONDS) -> bool:
+    """
+    Open ip_reset_url in a new tab (e.g. MobileHop proxy reset). Page may show an error but IP is changed.
+    Wait, close the tab, then reload the first tab so subsequent requests use the new IP.
+    Returns True if the flow completed without exception.
+    """
+    try:
+        context = page.context
+        new_tab = context.new_page()
+        try:
+            _log(f"Opening IP reset URL in new tab (wait {wait_seconds}s)...")
+            new_tab.goto(ip_reset_url, wait_until="domcontentloaded", timeout=30_000)
+            time.sleep(wait_seconds)
+        finally:
+            new_tab.close()
+        _log("Reloading Steve Morse tab to use new IP...")
+        page.reload(wait_until="domcontentloaded", timeout=30_000)
+        return True
+    except Exception as e:
+        _log(f"IP reset via URL failed: {e}")
+        return False
 
 
 def _adspower_start(profile_id: str, api_base: str) -> tuple[str | None, str | None]:
@@ -137,13 +163,15 @@ def _run_flow(
     adspower_profile: str | None = None,
     adspower_api_base: str = DEFAULT_ADSPOWER_API,
     refresh_host: str = DEFAULT_REFRESH_HOST,
+    ip_reset_url: str | None = DEFAULT_IP_RESET_URL,
 ) -> dict:
     """
     Run the full flow in the browser. Returns a result dict suitable for JSON output.
 
     When adspower_profile is set, uses that AdsPower browser (so traffic uses that IP).
     If the page shows rate-limit text ("unexplained error", "Please notify me"), triggers
-    IP refresh via AdsPower refresh page and retries up to MAX_REFRESH_RETRIES times.
+    IP refresh: when ip_reset_url is set, opens it in a new tab (e.g. MobileHop proxy reset),
+    waits, closes tab, reloads first tab; otherwise uses AdsPower refresh page and retries.
     """
     config = get_latest_state_range(state, data_path)
     if not config:
@@ -290,10 +318,16 @@ def _run_flow(
                             break
                         # No "Not Issued" for this area; try next area
 
-                    if hit_rate_limit and adspower_profile and refresh_attempt < MAX_REFRESH_RETRIES:
-                        if rotate_ip_sync is None:
-                            _log("Rate limit hit. IP refresh skipped: adspower_refresh module not available.")
-                        else:
+                    if hit_rate_limit and refresh_attempt < MAX_REFRESH_RETRIES:
+                        ok = False
+                        if ip_reset_url:
+                            _log("Rate limit hit. Refreshing IP via reset URL in new tab...")
+                            ok = _refresh_ip_via_reset_url(page, ip_reset_url, IP_RESET_WAIT_SECONDS)
+                            if ok:
+                                _log("IP reset URL completed. Retrying...")
+                                time.sleep(2)
+                                continue
+                        if not ok and adspower_profile and rotate_ip_sync:
                             _log(f"Rate limit hit. Attempting IP refresh for profile {adspower_profile} (host={refresh_host})...")
                             ok = rotate_ip_sync(adspower_profile, headless=True, host=refresh_host)
                             if ok:
@@ -302,6 +336,8 @@ def _run_flow(
                                 continue
                             else:
                                 _log("IP refresh failed (refresh button not found or error). Check AdsPower refresh page at https://start.adspower.net/")
+                        elif not ok and not ip_reset_url:
+                            _log("Rate limit hit. IP refresh skipped: no ip_reset_url and adspower_refresh not available.")
                     if hit_rate_limit:
                         # Screenshot and keep browser open for visual troubleshooting
                         try:
@@ -353,6 +389,7 @@ async def async_run_five_digit_decoder(
     adspower_profile: str | None = None,
     adspower_api_base: str = DEFAULT_ADSPOWER_API,
     refresh_host: str = DEFAULT_REFRESH_HOST,
+    ip_reset_url: str | None = DEFAULT_IP_RESET_URL,
 ) -> dict:
     """
     Async entrypoint for the five-digit decoder flow. Runs the sync Playwright
@@ -360,7 +397,8 @@ async def async_run_five_digit_decoder(
     parallel user sessions (each gets its own thread and browser instance).
 
     When adspower_profile is set, uses that AdsPower browser; on rate-limit
-    ("unexplained error" / "Please notify me") triggers IP refresh and retries.
+    ("unexplained error" / "Please notify me") opens ip_reset_url in new tab to
+    rotate IP (e.g. MobileHop), then retries.
     """
     if sync_playwright is None:
         return {
@@ -383,6 +421,7 @@ async def async_run_five_digit_decoder(
         adspower_profile,
         adspower_api_base,
         refresh_host,
+        ip_reset_url,
     )
 
 
@@ -433,6 +472,13 @@ def main() -> int:
         help="Host for AdsPower IP refresh page URL",
     )
     parser.add_argument(
+        "--ip-reset-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help="When rate limited, open this URL in a new tab to rotate IP (e.g. MobileHop proxy reset). Default: " + DEFAULT_IP_RESET_URL[:50] + "...",
+    )
+    parser.add_argument(
         "--output",
         "-o",
         type=Path,
@@ -452,6 +498,7 @@ def main() -> int:
         return 1
 
     data_path = args.data or DEFAULT_DATA_PATH
+    ip_reset_url = (args.ip_reset_url or DEFAULT_IP_RESET_URL) if args.ip_reset_url != "" else None
     result = _run_flow(
         state=args.state,
         data_path=data_path,
@@ -460,6 +507,7 @@ def main() -> int:
         adspower_profile=args.adspower_profile,
         adspower_api_base=args.adspower_api,
         refresh_host=args.refresh_host,
+        ip_reset_url=ip_reset_url,
     )
 
     out = json.dumps(result, indent=2)
