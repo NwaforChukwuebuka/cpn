@@ -233,9 +233,15 @@ def fill_step(
                     if not sel:
                         continue
                     loc = scope.locator(sel)
+                    if _count(loc) == 0:
+                        loc = page.locator(sel)
                     if _count(loc) > 0:
                         _log(f"  Clicking radio via selector: {sel}")
-                        loc.first.click()
+                        first = loc.first
+                        try:
+                            first.click()
+                        except Exception:
+                            first.click(force=True)
                         clicked = True
                         break
                 if not clicked and optional:
@@ -260,18 +266,28 @@ def fill_step(
                                 clicked = True
                 if not clicked and not optional:
                     # Try visible label text first (only for required fields).
-                    label_loc = scope.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
-                    if _count(label_loc) > 0:
-                        _log(f"  Clicking visible label text '{label}'...")
-                        label_loc.first.click()
-                        clicked = True
+                    for loc_scope in (scope, page):
+                        label_loc = loc_scope.get_by_text(re.compile(rf"^\s*{re.escape(label)}\s*$", re.I))
+                        if _count(label_loc) > 0:
+                            _log(f"  Clicking visible label text '{label}'...")
+                            try:
+                                label_loc.first.click()
+                            except Exception:
+                                label_loc.first.click(force=True)
+                            clicked = True
+                            break
                 if not clicked and not optional:
                     # Fallback to associated label.
-                    label_loc = scope.get_by_label(label, exact=False)
-                    if _count(label_loc) > 0:
-                        _log(f"  Clicking associated label '{label}'...")
-                        label_loc.first.click()
-                        clicked = True
+                    for loc_scope in (scope, page):
+                        label_loc = loc_scope.get_by_label(label, exact=False)
+                        if _count(label_loc) > 0:
+                            _log(f"  Clicking associated label '{label}'...")
+                            try:
+                                label_loc.first.click()
+                            except Exception:
+                                label_loc.first.click(force=True)
+                            clicked = True
+                            break
                 if not clicked:
                     if optional:
                         _log(f"  (question not present, skipping)")

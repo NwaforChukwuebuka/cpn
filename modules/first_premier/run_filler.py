@@ -577,7 +577,8 @@ def _run_filler_core(
                 _log(f"Exception: {e}")
                 all_errors.append(str(e))
             finally:
-                _log("Leaving browser open (close manually or stop AdsPower when done).")
+                _adspower_stop(adspower_profile, adspower_api_base)
+                _log("AdsPower stopped.")
 
         log_entry = {
             "timestamp": datetime.now(UTC).isoformat(),
