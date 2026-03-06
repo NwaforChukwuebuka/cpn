@@ -288,6 +288,25 @@ def fill_step(
                                 label_loc.first.click(force=True)
                             clicked = True
                             break
+                if not clicked and not optional and profile_key == "bank_account_type" and "Checking" in label:
+                    # Banking step: Capital One may use different DOM; try role and data-testid.
+                    for fallback_loc in (
+                        page.get_by_role("radio", name=re.compile(r"Checking\s*&\s*savings", re.I)),
+                        page.locator("[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[type='radio']").first,
+                        page.locator("#BANK_ACCOUNT-fieldset input[type='radio']").first,
+                    ):
+                        try:
+                            if _count(fallback_loc) > 0:
+                                _log(f"  Clicking bank option via fallback...")
+                                el = fallback_loc.first
+                                try:
+                                    el.click()
+                                except Exception:
+                                    el.click(force=True)
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
                 if not clicked:
                     if optional:
                         _log(f"  (question not present, skipping)")

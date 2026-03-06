@@ -70,7 +70,7 @@
       "step": 7,
       "description": "Banking",
       "fields": [
-        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selectors": ["label[for='BANK_ACCOUNT:CAS']", "input[id='BANK_ACCOUNT:CAS']", "[id='BANK_ACCOUNT:CAS']", "label:has-text('Checking & savings')", "input[name='BANK_ACCOUNT'][id='BANK_ACCOUNT:CAS']"]},
+        {"profile_key": "bank_account_type", "type": "radio", "label": "Checking & savings", "selectors": ["[data-testid='banking-section'] [data-testid='applicantBankAccountSummary'] input[type='radio']", "#BANK_ACCOUNT-fieldset input[type='radio']", "label[for='BANK_ACCOUNT:CAS']", "input[id='BANK_ACCOUNT:CAS']", "[id='BANK_ACCOUNT:CAS']", "label:has-text('Checking & savings')", "input[name='BANK_ACCOUNT'][id='BANK_ACCOUNT:CAS']"]},
         {"profile_key": "cash_advance", "type": "radio", "label": "Yes", "selectors": ["label[for='CASH_ADVANCE:true']", "label[for='gravity-radio-cashadvance-radio-0']"]}
       ],
       "continue_button": "Continue",
