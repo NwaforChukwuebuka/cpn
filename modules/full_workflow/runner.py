@@ -248,39 +248,39 @@ async def run_full_workflow_resilient_async(
     if not (last_completed and _STEP_INDEX[last_completed] >= _STEP_INDEX["stevemorse"]):
         _log("Step 1/5: Steve Morse (five-digit decoder)...")
         await _notify(PROGRESS_GETTING_CPN)
-            steve_profile_id = get_profile_for_index(profile_base_index)
+        steve_profile_id = get_profile_for_index(profile_base_index)
 
-            async def _run_steve() -> dict[str, Any]:
-                if adspower_step_gate is not None:
-                    await adspower_step_gate.wait_turn("stevemorse")
-                return await async_run_five_digit_decoder(
-                    state,
-                    delay_seconds=steve_morse_delay_seconds,
-                    headless=steve_morse_headless,
-                    adspower_profile=steve_profile_id,
-                    adspower_api_base=adspower_api_base,
-                )
-
-            ok, steve_result, err = await _run_step_with_retries(
-                step_name="stevemorse",
-                run_once=_run_steve,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                log_callback=log_callback,
+        async def _run_steve() -> dict[str, Any]:
+            if adspower_step_gate is not None:
+                await adspower_step_gate.wait_turn("stevemorse")
+            return await async_run_five_digit_decoder(
+                state,
+                delay_seconds=steve_morse_delay_seconds,
+                headless=steve_morse_headless,
+                adspower_profile=steve_profile_id,
+                adspower_api_base=adspower_api_base,
             )
-            result["steve_result"] = steve_result
-            if not ok:
-                result["error"] = err or "Steve Morse failed"
-                result["elapsed_sec"] = _elapsed(start_wall)
-                await _save_checkpoint(result, result.get("last_completed"))
-                return result
-            result["partial_cpn"] = {
-                "area": steve_result.get("area"),
-                "group": steve_result.get("group"),
-                "prefix_5": steve_result.get("prefix_5"),
-            }
-            result["last_completed"] = "stevemorse"
-            await _save_checkpoint(result, "stevemorse")
+
+        ok, steve_result, err = await _run_step_with_retries(
+            step_name="stevemorse",
+            run_once=_run_steve,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            log_callback=log_callback,
+        )
+        result["steve_result"] = steve_result
+        if not ok:
+            result["error"] = err or "Steve Morse failed"
+            result["elapsed_sec"] = _elapsed(start_wall)
+            await _save_checkpoint(result, result.get("last_completed"))
+            return result
+        result["partial_cpn"] = {
+            "area": steve_result.get("area"),
+            "group": steve_result.get("group"),
+            "prefix_5": steve_result.get("prefix_5"),
+        }
+        result["last_completed"] = "stevemorse"
+        await _save_checkpoint(result, "stevemorse")
 
     if stop_after == "stevemorse":
         result["ok"] = True
