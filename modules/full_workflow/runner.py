@@ -109,22 +109,13 @@ async def _run_step_with_retries(
     return False, {"ok": False, "error": f"{step_name} failed"}, f"{step_name} failed"
 
 
-# User-facing progress labels (base messages; % shown via gradual ticker)
-PROGRESS_GETTING_CPN = "1️⃣ Creating your CPN"
-PROGRESS_VALIDATING_CPN = "2️⃣ Validating your CPN"
-PROGRESS_BUILDING_PROFILE = "3️⃣ Building your credit profile"
-PROGRESS_APPLICATION_STEP_1 = "4️⃣ Trimerge with Capital One Credit Card"
-PROGRESS_APPLICATION_STEP_2 = "5️⃣ Trimerge with First Premier Credit"
+# User-facing progress labels (major milestones only — one message per step)
+PROGRESS_GETTING_CPN = "1️⃣ Creating your CPN — 20%"
+PROGRESS_VALIDATING_CPN = "2️⃣ Validating your CPN — 40%"
+PROGRESS_BUILDING_PROFILE = "3️⃣ Building your credit profile — 60%"
+PROGRESS_APPLICATION_STEP_1 = "4️⃣ Trimerge with Capital One Credit Card — 80%"
+PROGRESS_APPLICATION_STEP_2 = "5️⃣ Trimerge with First Premier Credit — 95%"
 PROGRESS_ALL_DONE = "✅ All done — 100%"
-
-# Per-step percentage ranges for gradual loading effect (min, max)
-_PROGRESS_RANGES = {
-    "stevemorse": (8, 20),
-    "ssn": (22, 40),
-    "profile": (42, 60),
-    "capital_one": (62, 80),
-    "first_premier": (82, 95),
-}
 
 
 async def run_full_workflow_resilient_async(
@@ -253,37 +244,10 @@ async def run_full_workflow_resilient_async(
             except Exception:
                 pass
 
-    async def _progress_ticker(
-        base_msg: str, pct_min: int, pct_max: int, interval_sec: float = 2.5
-    ) -> None:
-        """Send gradual progress (8%, 12%, ...) until task is cancelled."""
-        pct = pct_min
-        while True:
-            await _notify(f"{base_msg} — {pct}%")
-            pct = min(pct + 4, pct_max)
-            await asyncio.sleep(interval_sec)
-
-    def _start_progress_ticker(step_name: str, base_msg: str) -> asyncio.Task[None] | None:
-        r = _PROGRESS_RANGES.get(step_name)
-        if r is None or progress_callback is None:
-            return None
-        pct_min, pct_max = r
-        return asyncio.create_task(_progress_ticker(base_msg, pct_min, pct_max))
-
-    async def _stop_progress_ticker(task: asyncio.Task[None] | None) -> None:
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
     # --- Step 1: Steve Morse ---
     if not (last_completed and _STEP_INDEX[last_completed] >= _STEP_INDEX["stevemorse"]):
         _log("Step 1/5: Steve Morse (five-digit decoder)...")
-        ticker = _start_progress_ticker("stevemorse", PROGRESS_GETTING_CPN)
-        try:
+        await _notify(PROGRESS_GETTING_CPN)
             steve_profile_id = get_profile_for_index(profile_base_index)
 
             async def _run_steve() -> dict[str, Any]:
@@ -317,8 +281,6 @@ async def run_full_workflow_resilient_async(
             }
             result["last_completed"] = "stevemorse"
             await _save_checkpoint(result, "stevemorse")
-        finally:
-            await _stop_progress_ticker(ticker)
 
     if stop_after == "stevemorse":
         result["ok"] = True
@@ -329,37 +291,34 @@ async def run_full_workflow_resilient_async(
     # --- Step 2: SSN Validator ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["ssn"]):
         _log("Step 2/5: SSN Validator...")
-        ticker = _start_progress_ticker("ssn", PROGRESS_VALIDATING_CPN)
-        try:
-            partial_cpn = result.get("partial_cpn") or {}
-            ssn_profile_id = get_profile_for_index(profile_base_index)
+        await _notify(PROGRESS_VALIDATING_CPN)
+        partial_cpn = result.get("partial_cpn") or {}
+        ssn_profile_id = get_profile_for_index(profile_base_index)
 
-            async def _run_ssn() -> dict[str, Any]:
-                if adspower_step_gate is not None:
-                    await adspower_step_gate.wait_turn("ssn")
-                return await run_validation_async(
-                    partial_cpn,
-                    adspower_profile=ssn_profile_id,
-                    adspower_api_base=adspower_api_base,
-                )
-
-            ok, ssn_result, err = await _run_step_with_retries(
-                step_name="ssn",
-                run_once=_run_ssn,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                log_callback=log_callback,
+        async def _run_ssn() -> dict[str, Any]:
+            if adspower_step_gate is not None:
+                await adspower_step_gate.wait_turn("ssn")
+            return await run_validation_async(
+                partial_cpn,
+                adspower_profile=ssn_profile_id,
+                adspower_api_base=adspower_api_base,
             )
-            result["ssn_result"] = ssn_result
-            if not ok:
-                result["error"] = err or "SSN Validator failed"
-                result["elapsed_sec"] = _elapsed(start_wall)
-                await _save_checkpoint(result, result.get("last_completed"))
-                return result
-            result["last_completed"] = "ssn"
-            await _save_checkpoint(result, "ssn")
-        finally:
-            await _stop_progress_ticker(ticker)
+
+        ok, ssn_result, err = await _run_step_with_retries(
+            step_name="ssn",
+            run_once=_run_ssn,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            log_callback=log_callback,
+        )
+        result["ssn_result"] = ssn_result
+        if not ok:
+            result["error"] = err or "SSN Validator failed"
+            result["elapsed_sec"] = _elapsed(start_wall)
+            await _save_checkpoint(result, result.get("last_completed"))
+            return result
+        result["last_completed"] = "ssn"
+        await _save_checkpoint(result, "ssn")
 
     if stop_after == "ssn":
         result["ok"] = True
@@ -370,27 +329,24 @@ async def run_full_workflow_resilient_async(
     # --- Step 3: Profile Builder ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["profile"]):
         _log("Step 3/5: Profile Builder...")
-        ticker = _start_progress_ticker("profile", PROGRESS_BUILDING_PROFILE)
-        try:
-            full_cpn = result.get("ssn_result")
-            profile, build_errors = await build_profile_async(
-                template,
-                full_cpn=full_cpn,
-                verification=None,
-            )
-            result["profile"] = profile
-            if not profile or not profile.get("cpn"):
-                msg = "Profile build failed or cpn not set"
-                if build_errors:
-                    msg += "; " + "; ".join(build_errors[:3])
-                result["error"] = msg
-                result["elapsed_sec"] = _elapsed(start_wall)
-                await _save_checkpoint(result, result.get("last_completed"))
-                return result
-            result["last_completed"] = "profile"
-            await _save_checkpoint(result, "profile")
-        finally:
-            await _stop_progress_ticker(ticker)
+        await _notify(PROGRESS_BUILDING_PROFILE)
+        full_cpn = result.get("ssn_result")
+        profile, build_errors = await build_profile_async(
+            template,
+            full_cpn=full_cpn,
+            verification=None,
+        )
+        result["profile"] = profile
+        if not profile or not profile.get("cpn"):
+            msg = "Profile build failed or cpn not set"
+            if build_errors:
+                msg += "; " + "; ".join(build_errors[:3])
+            result["error"] = msg
+            result["elapsed_sec"] = _elapsed(start_wall)
+            await _save_checkpoint(result, result.get("last_completed"))
+            return result
+        result["last_completed"] = "profile"
+        await _save_checkpoint(result, "profile")
 
     if stop_after == "profile":
         result["ok"] = True
@@ -401,40 +357,37 @@ async def run_full_workflow_resilient_async(
     # --- Step 4: Capital One ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["capital_one"]):
         _log("Step 4/5: Capital One filler...")
-        ticker = _start_progress_ticker("capital_one", PROGRESS_APPLICATION_STEP_1)
-        try:
-            cap_profile_id = get_profile_for_index(profile_base_index + 1)
-            profile = result.get("profile")
+        await _notify(PROGRESS_APPLICATION_STEP_1)
+        cap_profile_id = get_profile_for_index(profile_base_index + 1)
+        profile = result.get("profile")
 
-            async def _run_cap() -> dict[str, Any]:
-                if adspower_step_gate is not None:
-                    await adspower_step_gate.wait_turn("capital_one")
-                return await capital_one_run_filler_async(
-                    profile,
-                    capital_one_steps,
-                    log_path=None,
-                    stop_after_step=capital_one_stop_after_step,
-                    adspower_profile=cap_profile_id,
-                    adspower_api_base=adspower_api_base,
-                )
-
-            ok, cap_result, err = await _run_step_with_retries(
-                step_name="capital_one",
-                run_once=_run_cap,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                log_callback=log_callback,
+        async def _run_cap() -> dict[str, Any]:
+            if adspower_step_gate is not None:
+                await adspower_step_gate.wait_turn("capital_one")
+            return await capital_one_run_filler_async(
+                profile,
+                capital_one_steps,
+                log_path=None,
+                stop_after_step=capital_one_stop_after_step,
+                adspower_profile=cap_profile_id,
+                adspower_api_base=adspower_api_base,
             )
-            result["cap_result"] = cap_result
-            if not ok:
-                result["error"] = err or "Capital One filler failed"
-                result["elapsed_sec"] = _elapsed(start_wall)
-                await _save_checkpoint(result, result.get("last_completed"))
-                return result
-            result["last_completed"] = "capital_one"
-            await _save_checkpoint(result, "capital_one")
-        finally:
-            await _stop_progress_ticker(ticker)
+
+        ok, cap_result, err = await _run_step_with_retries(
+            step_name="capital_one",
+            run_once=_run_cap,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            log_callback=log_callback,
+        )
+        result["cap_result"] = cap_result
+        if not ok:
+            result["error"] = err or "Capital One filler failed"
+            result["elapsed_sec"] = _elapsed(start_wall)
+            await _save_checkpoint(result, result.get("last_completed"))
+            return result
+        result["last_completed"] = "capital_one"
+        await _save_checkpoint(result, "capital_one")
 
     if stop_after == "capital_one":
         result["ok"] = True
@@ -445,39 +398,36 @@ async def run_full_workflow_resilient_async(
     # --- Step 5: First Premier ---
     if not (result.get("last_completed") and _STEP_INDEX[result["last_completed"]] >= _STEP_INDEX["first_premier"]):
         _log("Step 5/5: First Premier filler...")
-        ticker = _start_progress_ticker("first_premier", PROGRESS_APPLICATION_STEP_2)
-        try:
-            fp_profile_id = get_profile_for_index(profile_base_index + 2)
-            profile = result.get("profile")
+        await _notify(PROGRESS_APPLICATION_STEP_2)
+        fp_profile_id = get_profile_for_index(profile_base_index + 2)
+        profile = result.get("profile")
 
-            async def _run_fp() -> dict[str, Any]:
-                if adspower_step_gate is not None:
-                    await adspower_step_gate.wait_turn("first_premier")
-                return await first_premier_run_filler_async(
-                    profile,
-                    first_premier_steps,
-                    log_path=None,
-                    adspower_profile=fp_profile_id,
-                    adspower_api_base=adspower_api_base,
-                )
-
-            ok, fp_result, err = await _run_step_with_retries(
-                step_name="first_premier",
-                run_once=_run_fp,
-                retry_attempts=retry_attempts,
-                retry_backoff_seconds=retry_backoff_seconds,
-                log_callback=log_callback,
+        async def _run_fp() -> dict[str, Any]:
+            if adspower_step_gate is not None:
+                await adspower_step_gate.wait_turn("first_premier")
+            return await first_premier_run_filler_async(
+                profile,
+                first_premier_steps,
+                log_path=None,
+                adspower_profile=fp_profile_id,
+                adspower_api_base=adspower_api_base,
             )
-            result["fp_result"] = fp_result
-            if not ok:
-                result["error"] = err or "First Premier filler failed"
-                result["elapsed_sec"] = _elapsed(start_wall)
-                await _save_checkpoint(result, result.get("last_completed"))
-                return result
-            result["last_completed"] = "first_premier"
-            await _save_checkpoint(result, "first_premier")
-        finally:
-            await _stop_progress_ticker(ticker)
+
+        ok, fp_result, err = await _run_step_with_retries(
+            step_name="first_premier",
+            run_once=_run_fp,
+            retry_attempts=retry_attempts,
+            retry_backoff_seconds=retry_backoff_seconds,
+            log_callback=log_callback,
+        )
+        result["fp_result"] = fp_result
+        if not ok:
+            result["error"] = err or "First Premier filler failed"
+            result["elapsed_sec"] = _elapsed(start_wall)
+            await _save_checkpoint(result, result.get("last_completed"))
+            return result
+        result["last_completed"] = "first_premier"
+        await _save_checkpoint(result, "first_premier")
 
     result["ok"] = True
     result["error"] = None

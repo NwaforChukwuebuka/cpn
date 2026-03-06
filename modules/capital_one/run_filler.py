@@ -1431,13 +1431,9 @@ def _run_filler_core(
                 except Exception as e:
                     _log(f"Warning: cleanup skipped (browser/page may already be closed): {e}")
     finally:
-        last_step_num = steps_list[-1].get("step", len(steps_list)) if steps_list else 0
-        if steps_completed == last_step_num:
-            _log("Leaving browser and AdsPower running for agreement page (close manually when done).")
-        else:
-            _log("Stopping AdsPower profile...")
-            _adspower_stop(adspower_profile, adspower_api_base)
-            _log("AdsPower stopped.")
+        _log("Stopping AdsPower profile...")
+        _adspower_stop(adspower_profile, adspower_api_base)
+        _log("AdsPower stopped.")
         if hasattr(_log_callback, "callback"):
             delattr(_log_callback, "callback")
 
