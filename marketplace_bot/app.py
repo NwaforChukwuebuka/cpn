@@ -113,6 +113,11 @@ class OrderStates(StatesGroup):
     date_of_birth = State()
 
 
+class RetryStates(StatesGroup):
+    """States for retry flows (e.g. re-enter phone when previous was invalid)."""
+    retry_phone = State()
+
+
 class BotRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -188,6 +193,7 @@ class BotRuntime:
         self.router.message.register(self.capture_state, OrderStates.state)
         self.router.message.register(self.capture_zip, OrderStates.zip)
         self.router.message.register(self.capture_dob, OrderStates.date_of_birth)
+        self.router.message.register(self.capture_retry_phone, RetryStates.retry_phone)
 
     async def handle_start(self, message: Message, state: FSMContext) -> None:
         await state.clear()
@@ -328,6 +334,38 @@ class BotRuntime:
                 parse_mode="HTML",
             )
             return
+
+        # Check if failure was due to invalid phone — prompt for new number before retrying
+        wf_job = await self.repo.get_latest_workflow_job_for_order(order_id)
+        wf_error = (wf_job.get("error") or "") if wf_job else ""
+        if self._is_invalid_phone_error(wf_error):
+            await state.set_state(RetryStates.retry_phone)
+            await state.update_data(retry_order_id=order_id, retry_order=order)
+            await message.answer(
+                "📱 <b>Invalid phone number</b>\n\n"
+                "Your order failed because the phone number was not accepted. "
+                "Please enter a <b>valid 10-digit US phone number</b> (e.g. 312-555-1234):",
+                reply_markup=_cancel_keyboard(),
+                parse_mode="HTML",
+            )
+            return
+
+        await self._submit_retry_job(order, message)
+
+    def _is_invalid_phone_error(self, error: str | None) -> bool:
+        """True if the workflow error indicates an invalid phone number."""
+        if not error:
+            return False
+        lower = error.lower()
+        return (
+            "valid 10-digit phone" in lower
+            or "invalid phone" in lower
+            or "invalid phone number" in lower
+        )
+
+    async def _submit_retry_job(self, order: dict, message: Message) -> None:
+        """Submit the retry workflow job for the given order."""
+        order_id = order["id"]
         await self.repo.mark_order_processing(order_id)
         workflow_state = workflow_state_from_profile(
             order["profile_snapshot"], self.settings.workflow_state
@@ -349,6 +387,32 @@ class BotRuntime:
             reply_markup=_main_menu_keyboard(),
             parse_mode="HTML",
         )
+
+    async def capture_retry_phone(self, message: Message, state: FSMContext) -> None:
+        """Capture new phone number when retrying after invalid phone error."""
+        raw = (message.text or "").strip()
+        ok, err = validate_phone(raw)
+        if not ok:
+            await message.answer(
+                f"❌ {err}\n\n"
+                "Please enter a valid 10-digit US phone number (e.g. 312-555-1234):",
+                reply_markup=_cancel_keyboard(),
+            )
+            return
+        data = await state.get_data()
+        order = data.get("retry_order")
+        order_id = data.get("retry_order_id")
+        await state.clear()
+        if not order or not order_id:
+            await message.answer("Session expired. Use <b>Retry</b> again.", reply_markup=_main_menu_keyboard(), parse_mode="HTML")
+            return
+
+        profile = dict(order["profile_snapshot"])
+        profile["phone"] = raw
+        order["profile_snapshot"] = profile
+        await self.repo.update_order_profile_snapshot(order_id, profile)
+
+        await self._submit_retry_job(order, message)
 
     async def capture_first_name(self, message: Message, state: FSMContext) -> None:
         raw = (message.text or "").strip()
@@ -648,10 +712,16 @@ class BotRuntime:
         else:
             await self.repo.fail_order(order_id)
             if telegram_id is not None:
+                base = "❌ <b>Something went wrong</b>\n\nWe couldn't complete your order.\n\n"
+                if self._is_invalid_phone_error(record.error):
+                    base += "Your order failed because the phone number was invalid. Use <b>Retry</b> and enter a new valid 10-digit phone number when prompted."
+                else:
+                    base += "You can retry from <b>My orders</b> without paying again."
                 await self.bot.send_message(
                     int(telegram_id),
-                    f"❌ <b>Something went wrong</b>\n\nWe couldn’t complete your order.\n\nYou can retry from <b>My orders</b> without paying again.",
+                    base,
                     parse_mode="HTML",
+                    reply_markup=_main_menu_keyboard(show_retry=True),
                 )
 
     async def handle_btcpay_webhook(self, request: web.Request) -> web.Response:

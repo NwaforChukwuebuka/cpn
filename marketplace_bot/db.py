@@ -193,6 +193,20 @@ class SupabaseRepo:
 
         await asyncio.to_thread(_op)
 
+    async def update_order_profile_snapshot(
+        self, order_id: str, profile_snapshot: dict[str, Any]
+    ) -> None:
+        """Update the profile_snapshot for an order (e.g. after user provides new phone on retry)."""
+        def _op() -> None:
+            (
+                self._client.table("orders")
+                .update({"profile_snapshot": profile_snapshot})
+                .eq("id", order_id)
+                .execute()
+            )
+
+        await asyncio.to_thread(_op)
+
     async def get_latest_order_for_user(self, user_id: str) -> dict[str, Any] | None:
         def _op() -> dict[str, Any] | None:
             resp = (
@@ -246,6 +260,21 @@ class SupabaseRepo:
             )
 
         await asyncio.to_thread(_op)
+
+    async def get_latest_workflow_job_for_order(self, order_id: str) -> dict[str, Any] | None:
+        """Get the most recent workflow job for an order (for checking failure reason)."""
+        def _op() -> dict[str, Any] | None:
+            resp = (
+                self._client.table("workflow_jobs")
+                .select("*")
+                .eq("order_id", order_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return resp.data[0] if resp.data else None
+
+        return await asyncio.to_thread(_op)
 
     async def update_workflow_job(
         self,
