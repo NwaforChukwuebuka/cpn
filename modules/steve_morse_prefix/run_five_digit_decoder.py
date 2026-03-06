@@ -46,7 +46,8 @@ except ImportError:
 
 URL = "https://stevemorse.org/ssn/ssn.html"
 NOT_ISSUED_MARKER = "Not Issued"
-MAX_GROUP_TRIES = 99
+GROUPS_PER_AREA = 10  # Try this many random groups per area before switching to next area
+MAX_AREA_TRIES = 20  # Try up to this many different areas before giving up
 DEFAULT_DELAY_SECONDS = 20
 
 # When the server is unhappy (e.g. rate limit), the page can show these; we refresh IP and retry.
@@ -219,55 +220,68 @@ def _run_flow(
                     else:
                         low, high = config_low, config_high
 
-                    # Step 3: Random area in verified range
-                    area = random.randint(low, high)
-                    area_str = f"{area:03d}"
-
-                    # Step 4: Five-Digit Decoder — set area, then try groups until "Not Issued"
-                    page.locator('select[name="ssn1"]').select_option(value=area_str)
-
-                    groups = [f"{i:02d}" for i in range(1, 100)]
-                    random.shuffle(groups)
+                    # Step 3 & 4: Try multiple areas; for each area, try GROUPS_PER_AREA random groups
+                    # Vary both area and group: if one area has all groups issued, try another area
+                    all_groups = [f"{i:02d}" for i in range(1, 100)]
                     found_group = None
+                    last_area_str = None
                     last_result_text = None
                     hit_rate_limit = False
+                    tried_areas: set[str] = set()
 
-                    for i, group in enumerate(groups):
-                        if i >= MAX_GROUP_TRIES:
-                            break
+                    for area_attempt in range(MAX_AREA_TRIES):
+                        # Pick a new random area (avoid repeating if possible)
+                        area = random.randint(low, high)
+                        area_str = f"{area:03d}"
+                        if len(tried_areas) < high - low + 1 and area_str in tried_areas:
+                            for a in range(low, high + 1):
+                                candidate = f"{a:03d}"
+                                if candidate not in tried_areas:
+                                    area_str = candidate
+                                    break
+                        tried_areas.add(area_str)
+                        last_area_str = area_str
 
-                        page.locator('select[name="ssn2"]').select_option(value=group)
-                        page.wait_for_timeout(800)
-                        result_el = page.locator("#wherewhen")
-                        result_el.wait_for(state="visible", timeout=5_000)
-                        text = result_el.text_content() or ""
-                        text = text.strip()
-                        last_result_text = text
+                        page.locator('select[name="ssn1"]').select_option(value=area_str)
+                        groups = random.sample(all_groups, min(GROUPS_PER_AREA, len(all_groups)))
 
-                        if NOT_ISSUED_MARKER in text:
-                            found_group = group
-                            break
-
-                        if _is_rate_limited(text):
-                            hit_rate_limit = True
+                        for i, group in enumerate(groups):
+                            page.locator('select[name="ssn2"]').select_option(value=group)
+                            page.wait_for_timeout(800)
+                            result_el = page.locator("#wherewhen")
+                            result_el.wait_for(state="visible", timeout=5_000)
+                            text = result_el.text_content() or ""
+                            text = text.strip()
                             last_result_text = text
+
+                            if NOT_ISSUED_MARKER in text:
+                                found_group = group
+                                break
+
+                            if _is_rate_limited(text):
+                                hit_rate_limit = True
+                                last_result_text = text
+                                break
+
+                            if i < len(groups) - 1 and delay_seconds > 0:
+                                page.wait_for_timeout(int(delay_seconds * 1000))
+
+                        if found_group is not None:
+                            prefix_5 = f"{area_str}-{found_group}"
+                            return {
+                                "ok": True,
+                                "error": None,
+                                "prefix_5": prefix_5,
+                                "area": area_str,
+                                "group": found_group,
+                                "state": state,
+                                "date_range_used": config_label,
+                                "verified_range": [low, high],
+                            }
+
+                        if hit_rate_limit:
                             break
-
-                        if i < len(groups) - 1 and delay_seconds > 0:
-                            page.wait_for_timeout(int(delay_seconds * 1000))
-
-                    if found_group is not None:
-                        prefix_5 = f"{area_str}-{found_group}"
-                        return {
-                            "ok": True,
-                            "error": None,
-                            "prefix_5": prefix_5,
-                            "area": area_str,
-                            "group": found_group,
-                            "state": state,
-                            "date_range_used": config_label,
-                            "verified_range": [low, high],
-                        }
+                        # No "Not Issued" for this area; try next area
 
                     if hit_rate_limit and adspower_profile and refresh_attempt < MAX_REFRESH_RETRIES and rotate_ip_sync:
                         ok = rotate_ip_sync(adspower_profile, headless=True, host=refresh_host)
@@ -280,7 +294,7 @@ def _run_flow(
                             "ok": False,
                             "error": err,
                             "prefix_5": None,
-                            "area": area_str,
+                            "area": last_area_str,
                             "group": None,
                             "state": state,
                             "date_range_used": config_label,
@@ -289,9 +303,9 @@ def _run_flow(
 
                     return {
                         "ok": False,
-                        "error": f"Did not find a 'Not Issued' group after {MAX_GROUP_TRIES} tries. Last result: {last_result_text!r}. Consider rate limit / delays.",
+                        "error": f"Did not find a 'Not Issued' prefix after trying {len(tried_areas)} area(s) × {GROUPS_PER_AREA} groups each. Last result: {last_result_text!r}. Consider rate limit / delays.",
                         "prefix_5": None,
-                        "area": area_str,
+                        "area": last_area_str,
                         "group": None,
                         "state": state,
                         "date_range_used": config_label,
