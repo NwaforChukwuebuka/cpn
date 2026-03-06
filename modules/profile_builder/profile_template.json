@@ -22,6 +22,7 @@
   "bank_account_type": true,
   "cash_advance": true,
   "job_type": "Self Employed",
+  "occupation": "Consultant",
   "time_at_address_years": 5,
   "time_at_address_months": 5,
   "time_at_address": "5 Years 5 Months",
