@@ -361,6 +361,17 @@ def fill_step(
     if skip_continue:
         return errors
 
+    # For address step: verify form content matches profile before Continue
+    step_num = step_spec.get("step")
+    if step_num == 3:
+        ok, mismatch = _verify_address_content(page, profile, scope, step_spec)
+        if not ok:
+            _log(f"  Address mismatch before Continue: {mismatch}")
+            errors.append(f"Address mismatch: {mismatch}")
+            _log("  NOT clicking Continue until address matches.")
+            return errors
+        _log("  Address verified: form matches profile.")
+
     # Pause so you can view what was picked before Continue is clicked
     if pause_after_fill_seconds and pause_after_fill_seconds > 0:
         secs = int(pause_after_fill_seconds) if pause_after_fill_seconds >= 1 else pause_after_fill_seconds
@@ -496,15 +507,90 @@ _ERROR_ELEMENT_SELECTORS = (
 )
 
 
-def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
+def _normalize_for_compare(s: str) -> str:
+    """Normalize string for address comparison: lowercase, collapse spaces."""
+    if not s:
+        return ""
+    return " ".join(str(s).lower().split())
+
+
+def _normalize_state_for_compare(s: str) -> str:
+    """Normalize state: 'Texas', 'Texas (TX)', 'TX' -> 'tx'."""
+    n = _normalize_for_compare(s)
+    if not n:
+        return ""
+    m = re.search(r"\(([a-z]{2})\)", n)
+    if m:
+        return m.group(1).lower()
+    if len(n) <= 3:
+        return n
+    state_abbr = {"texas": "tx", "florida": "fl", "california": "ca", "new york": "ny"}
+    return state_abbr.get(n, n[:2])
+
+
+def _verify_address_content(page, profile: dict, scope, step_spec: dict) -> tuple[bool, str]:
+    """
+    Read street, zip, city, state from form and compare to profile. Return (matches, message).
+    """
+    expected_street = _normalize_for_compare(str(get_profile_value(profile, "address.street") or ""))
+    expected_zip = _normalize_for_compare(str(get_profile_value(profile, "address.zip") or ""))
+    expected_city = _normalize_for_compare(str(get_profile_value(profile, "address.city") or ""))
+    expected_state = _normalize_state_for_compare(str(get_profile_value(profile, "address.state") or ""))
+
+    _ALT_ID_MAP = {"street": "address.residential.addressLine1", "zip": "address.residential.zipcode",
+                   "city": "address.residential.city", "state": "address.residential.state"}
+
+    def _read_field(profile_key: str) -> str:
+        for f in step_spec.get("fields", []):
+            if f.get("profile_key") == profile_key:
+                suffix = profile_key.split(".")[-1]
+                selectors = [f.get("selector")]
+                if suffix in _ALT_ID_MAP:
+                    selectors.append(f'[id="{_ALT_ID_MAP[suffix]}"]')
+                for sel in selectors:
+                    if not sel:
+                        continue
+                    try:
+                        loc = scope.locator(sel)
+                        if _count(loc) > 0:
+                            val = loc.first.input_value() or loc.first.evaluate("el => el.value || ''") or ""
+                            return _normalize_for_compare(str(val).strip())
+                    except Exception:
+                        pass
+                break
+        return ""
+
+    actual_street = _read_field("address.street")
+    actual_zip = _read_field("address.zip")
+    actual_city = _read_field("address.city")
+    actual_state_raw = _read_field("address.state")
+    actual_state = _normalize_state_for_compare(actual_state_raw) if actual_state_raw else ""
+
+    mismatches = []
+    if expected_street:
+        if expected_street not in actual_street and actual_street not in expected_street:
+            mismatches.append(f"street: expected '{expected_street[:30]}...' got '{actual_street[:40]}...'")
+        elif len(actual_street) > len(expected_street) * 1.5:
+            mismatches.append(f"street likely duplicated: got '{actual_street[:50]}...'")
+    if expected_zip and expected_zip != actual_zip:
+        mismatches.append(f"zip: expected '{expected_zip}' got '{actual_zip}'")
+    if expected_city and expected_city != actual_city:
+        mismatches.append(f"city: expected '{expected_city}' got '{actual_city}'")
+    if expected_state and expected_state != actual_state:
+        mismatches.append(f"state: expected '{expected_state}' got '{actual_state}'")
+
+    if mismatches:
+        return False, "; ".join(mismatches)
+    return True, ""
+
+
+def _refill_address_on_step3(page, step_spec: dict, profile: dict, attempt: int = 0) -> bool:
     """
     On address step (3), clear and refill the full address before retrying Continue.
 
-    Capital One sometimes switches to a different DOM variant on address-validation
-    errors, replacing IDs like #PHYSICAL_STREET_ADDRESS with
-    id="address.residential.addressLine1" etc.  This function tries the original
-    step-spec selector first, then falls back to the alternative IDs, then to
-    label-based lookup.
+    On attempt >= 2 (3rd/4th retry): for street with google_autocomplete, use focus-only —
+    click field to trigger autocomplete without typing (avoids duplication like "33330 Whitmire Rd30...").
+    Capital One sometimes switches DOM variants; tries original selectors then address.residential.* IDs.
     """
     _log("  Refilling full address before retry...")
     refilled_any = False
@@ -616,7 +702,6 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
                 )
                 _log(f"  Refilled {profile_key}: {selected}")
             elif field_spec.get("google_autocomplete"):
-                # Clear first via JS, then type slowly to trigger autocomplete
                 first.evaluate(
                     "el => {"
                     "  el.value = '';"
@@ -624,19 +709,66 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
                     "}"
                 )
                 page.wait_for_timeout(300)
-                first.type(value_str, delay=60)
-                pac = page.locator(".pac-container .pac-item")
-                try:
-                    pac.first.wait_for(state="visible", timeout=6000)
-                    pac.first.click()
+                if attempt >= 2:
+                    # 3rd/4th retry: focus only (no typing) — triggers cached autocomplete, avoids duplication
+                    _log(f"  Focus-only on street (attempt {attempt + 1}) to trigger autocomplete...")
+                    first.click()
                     page.wait_for_timeout(500)
-                    _log(f"  Refilled {profile_key} via autocomplete.")
-                except Exception:
-                    _log(f"  Warning: no autocomplete for {profile_key}; using typed text.")
+                    pac = page.locator(".pac-container .pac-item")
                     try:
-                        first.press("Escape")
+                        pac.first.wait_for(state="visible", timeout=4000)
+                        count = _count(pac)
+                        street_lower = value_str.lower()
+                        street_key = " ".join(value_str.split()[:3]).lower()
+                        clicked = False
+                        for i in range(count):
+                            item = pac.nth(i)
+                            try:
+                                text = (item.inner_text() or "").lower()
+                                if street_key[:20] in text or street_lower[:15] in text:
+                                    item.click()
+                                    clicked = True
+                                    _log(f"  Selected autocomplete: {text[:50]}...")
+                                    break
+                            except Exception:
+                                continue
+                        if not clicked and count > 0:
+                            pac.first.click()
+                            clicked = True
+                        if clicked:
+                            page.wait_for_timeout(500)
+                            _log(f"  Refilled {profile_key} via focus-triggered autocomplete.")
+                        else:
+                            raise Exception("no matching suggestion")
                     except Exception:
-                        pass
+                        _log(f"  No autocomplete on focus; falling back to typing.")
+                        first.type(value_str, delay=60)
+                        pac = page.locator(".pac-container .pac-item")
+                        try:
+                            pac.first.wait_for(state="visible", timeout=6000)
+                            pac.first.click()
+                            page.wait_for_timeout(500)
+                            _log(f"  Refilled {profile_key} via typed autocomplete.")
+                        except Exception:
+                            _log(f"  Warning: no autocomplete for {profile_key}; using typed text.")
+                            try:
+                                first.press("Escape")
+                            except Exception:
+                                pass
+                else:
+                    first.type(value_str, delay=60)
+                    pac = page.locator(".pac-container .pac-item")
+                    try:
+                        pac.first.wait_for(state="visible", timeout=6000)
+                        pac.first.click()
+                        page.wait_for_timeout(500)
+                        _log(f"  Refilled {profile_key} via autocomplete.")
+                    except Exception:
+                        _log(f"  Warning: no autocomplete for {profile_key}; using typed text.")
+                        try:
+                            first.press("Escape")
+                        except Exception:
+                            pass
             else:
                 first.fill(value_str)
                 _log(f"  Refilled {profile_key}: {value_str}")
@@ -646,6 +778,11 @@ def _refill_address_on_step3(page, step_spec: dict, profile: dict) -> bool:
             _log(f"  Warning: could not refill {profile_key}: {e}")
             continue
 
+    ok, mismatch = _verify_address_content(page, profile, scope, step_spec)
+    if not ok:
+        _log(f"  Address content mismatch after refill: {mismatch}")
+    else:
+        _log(f"  Address verified: form matches profile.")
     _log(f"  Address refill complete ({'some fields updated' if refilled_any else 'no fields updated'}).")
     return refilled_any
 
@@ -940,6 +1077,14 @@ def _verify_advanced_to_next_step(
 
         hard_err = _check_hard_error()
         if hard_err:
+            # "please check address" etc. may appear on the NEXT step (address) after we advanced.
+            # If next step markers are visible, we have advanced — treat as success, not failure.
+            if _step_markers_visible(page, next_step_spec, expected_next_step_num):
+                _log(
+                    f"  Hard error text '{hard_err}' found but next step (step {expected_next_step_num}) "
+                    "is visible; treating as advanced."
+                )
+                return None
             _log(f"  Hard error detected: {hard_err}")
             _save_error_html(page, save_html_dir, current_step_num)
             return f"Step {current_step_num}: form did not advance — {hard_err}"
@@ -952,13 +1097,21 @@ def _verify_advanced_to_next_step(
             _log(f"  Active step is already {active_before_refill}; treating as advanced.")
             return None
 
+        # If next step markers are visible, we have advanced — do not re-fill current step.
+        if _step_markers_visible(page, next_step_spec, expected_next_step_num):
+            _log(
+                f"  Next step (step {expected_next_step_num}) markers visible; "
+                "treating as advanced (was on wrong step scope)."
+            )
+            return None
+
         _log(f"  Form did not advance; reselecting options for this page, then retrying Continue ({attempt + 1}/{MAX_RETRIES})...")
 
         # Re-apply this step's selections/inputs only if we are still on the current step.
         if current_step_spec and profile:
             if _step_markers_visible(page, current_step_spec, current_step_num):
                 if current_step_num == 3:
-                    _refill_address_on_step3(page, current_step_spec, profile)
+                    _refill_address_on_step3(page, current_step_spec, profile, attempt)
                 else:
                     _log("  Re-filling step fields before retry...")
                     fill_step(page, profile, current_step_spec, step_timeout_ms, skip_continue=True)
