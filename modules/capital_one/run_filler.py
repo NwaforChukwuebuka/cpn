@@ -118,6 +118,28 @@ def load_json(path: Path) -> dict | None:
         return None
 
 
+# DOB: normalize to MM/DD/YYYY (zero-padded month/day, 4-digit year) for form fill
+_DOB_RE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
+
+
+def _normalize_dob(value: str) -> str:
+    """Return date string as MM/DD/YYYY (zero-padded). Pass-through if not parseable."""
+    s = (value or "").strip()
+    if not s:
+        return s
+    m = _DOB_RE.match(s)
+    if not m:
+        return s
+    month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if month < 1 or month > 12 or day < 1 or day > 31:
+        return s
+    try:
+        datetime(year, month, day)
+    except ValueError:
+        return s
+    return f"{month:02d}/{day:02d}/{year}"
+
+
 def get_profile_value(profile: dict, key: str) -> str | int | None:
     """Resolve dot-notation key from profile (e.g. capital_one.legal_first_name, address.street)."""
     val = profile
@@ -400,6 +422,8 @@ def fill_step(
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
         value_str = str(value).strip()
+        if profile_key == "date_of_birth":
+            value_str = _normalize_dob(value_str)
         _log(f"  Field {profile_key}: filling with '{value_str[:20]}{'...' if len(value_str) > 20 else ''}'")
 
         # Try selector(s) first (for id-based targeting), then label, then placeholder
@@ -545,17 +569,28 @@ def fill_step(
 
 
 def _click_agreement_next_button(page) -> bool:
-    """Click the Next button on the agreement page (after verifying information). Returns True if clicked."""
+    """Click the Next/Continue button on the agreement page (after checking boxes). Gravity uses 'Continue', legacy uses 'Next'."""
     patterns = [
-        page.locator("button.next-btn:not(.preapprove-btn)"),  # Next, not Submit my application
+        page.locator('button[name="continue-eca"]'),  # Gravity: Continue after Agreements section
+        page.locator('button[name="continue-opt-review-verify"]'),  # Gravity: Continue in verify section
+        page.get_by_role("button", name=re.compile(r"^\s*Continue\s*$", re.I)),  # Gravity
+        page.locator("button.next-btn:not(.preapprove-btn)"),  # Legacy: Next, not Submit my application
         page.get_by_role("button", name=re.compile(r"^next$", re.I)),
         page.locator("button:has-text('Next')"),
     ]
     for loc in patterns:
         try:
             if _count(loc) > 0:
-                loc.first.wait_for(state="visible", timeout=5000)
-                loc.first.click()
+                btn = loc.first
+                btn.wait_for(state="visible", timeout=5000)
+                try:
+                    btn.scroll_into_view_if_needed(timeout=2000)
+                except Exception:
+                    pass
+                try:
+                    btn.click(timeout=3000)
+                except Exception:
+                    btn.click(force=True, timeout=3000)
                 return True
         except Exception:
             continue
@@ -563,11 +598,12 @@ def _click_agreement_next_button(page) -> bool:
 
 
 def _click_agreement_submit_button(page) -> bool:
-    """Click the final 'Submit my application' button on the agreement page (after Next). Returns True if clicked."""
+    """Click the final 'Submit my application' button on the agreement page (after Next/Continue). Returns True if clicked."""
     patterns = [
         page.locator("[data-testid='preapprove-cta-button']"),
         page.get_by_role("button", name=re.compile(r"submit\s+my\s+application", re.I)),
         page.locator("button.preapprove-btn"),
+        page.locator("button.grv-button--action:has-text('Submit my application')"),  # Gravity
         page.locator("button:has-text('Submit my application')"),
     ]
     for loc in patterns:
@@ -1253,45 +1289,62 @@ def _save_agreement_page_html(page, save_dir: Path | None) -> None:
 def _check_agreement_boxes(page) -> list[str]:
     """
     On the agreement page (after step 8), check the two required authorization checkboxes.
-    The checkboxes live inside the "Agreements" accordion, which is collapsed by default
-    (section has visibility:hidden). We expand it first, then check the boxes (using
-    force=True in case the native input is styled hidden).
-    Note: communication language defaults to English and is intentionally left unchanged.
+    The checkboxes live inside the "Agreements" accordion, which may be collapsed.
+    Supports both legacy DOM (#authorizations-title, ELECTRONIC_COMMUNICATIONS_DISCLOSURE,
+    SSN_VERIFICATION_AUTHORIZATION) and Gravity variant (button "Agreements",
+    paperlessConsent, ssnVerificationAuthorizationConsent).
     """
     errors: list[str] = []
+    # (label, list of checkbox ids to try in order — Gravity first, then legacy)
     required_boxes = [
-        ("Paperless communications", "ELECTRONIC_COMMUNICATIONS_DISCLOSURE"),
-        ("SSN verification authorization", "SSN_VERIFICATION_AUTHORIZATION"),
+        ("Paperless communications", ["paperlessConsent", "ELECTRONIC_COMMUNICATIONS_DISCLOSURE"]),
+        ("SSN verification authorization", ["ssnVerificationAuthorizationConsent", "SSN_VERIFICATION_AUTHORIZATION"]),
     ]
 
     _log("Waiting for agreement page checkboxes...")
-    # Agreements are inside an accordion; expand it so the checkboxes are in a visible section
-    accordion_btn = page.locator("#authorizations-title").first
-    try:
-        accordion_btn.wait_for(state="visible", timeout=15000)
-        if accordion_btn.get_attribute("aria-expanded") != "true":
-            _log("  Expanding Agreements accordion...")
-            accordion_btn.click()
-            page.wait_for_timeout(500)
-    except Exception as e:
-        msg = f"Agreement accordion not ready: {e}"
-        _log(f"  ERROR: {msg}")
-        return [msg]
-
-    # Wait for first checkbox to be present (may stay "hidden" due to custom styling)
-    first_box = page.locator(f'input[type="checkbox"]#{required_boxes[0][1]}').first
-    try:
-        first_box.wait_for(state="attached", timeout=10000)
-    except Exception as e:
-        msg = f"Agreement page did not become ready: {e}"
-        _log(f"  ERROR: {msg}")
-        return [msg]
-
-    for label, box_id in required_boxes:
+    # Expand Agreements accordion: try Gravity (button text) then legacy (#authorizations-title)
+    accordion_selectors = [
+        page.get_by_role("button", name=re.compile(r"^\s*Agreements\s*$", re.I)),
+        page.locator("button.grv-accordion__title:has-text('Agreements')"),
+        page.locator("#authorizations-title"),
+    ]
+    accordion_ok = False
+    for acc in accordion_selectors:
         try:
-            loc = page.locator(f'input[type="checkbox"]#{box_id}')
-            if _count(loc) == 0:
-                raise RuntimeError(f"Checkbox #{box_id} not found")
+            if _count(acc) > 0:
+                btn = acc.first
+                btn.wait_for(state="visible", timeout=8000)
+                if btn.get_attribute("aria-expanded") != "true":
+                    _log("  Expanding Agreements accordion...")
+                    btn.click()
+                    page.wait_for_timeout(500)
+                accordion_ok = True
+                break
+        except Exception:
+            continue
+    if not accordion_ok:
+        msg = "Agreement accordion not ready: no Agreements control found (tried button text and #authorizations-title)"
+        _log(f"  ERROR: {msg}")
+        return [msg]
+
+    # Wait for at least one checkbox to be present
+    any_checkbox = page.locator("input[type='checkbox'][id='paperlessConsent'], input[type='checkbox'][id='ELECTRONIC_COMMUNICATIONS_DISCLOSURE']")
+    try:
+        any_checkbox.first.wait_for(state="attached", timeout=10000)
+    except Exception as e:
+        _log(f"  ERROR: Agreement page did not become ready: {e}")
+        return [f"Agreement page did not become ready: {e}"]
+
+    for label, id_list in required_boxes:
+        try:
+            loc = None
+            for box_id in id_list:
+                candidate = page.locator(f'input[type="checkbox"]#{box_id}')
+                if _count(candidate) > 0:
+                    loc = candidate
+                    break
+            if loc is None or _count(loc) == 0:
+                raise RuntimeError(f"Checkbox not found (tried: {id_list})")
             box = loc.first
             box.wait_for(state="attached", timeout=5000)
             if box.is_checked():

@@ -137,6 +137,24 @@ def validate_zip(text: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def normalize_date_of_birth(text: str) -> str | None:
+    """Parse MM/DD/YYYY (with optional single-digit month/day) and return zero-padded MM/DD/YYYY, or None if invalid."""
+    s = (text or "").strip()
+    if not s:
+        return None
+    m = _DOB_RE.match(s)
+    if not m:
+        return None
+    month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if month < 1 or month > 12 or day < 1 or day > 31 or year < 1900 or year > 2010:
+        return None
+    try:
+        datetime(year, month, day)
+    except ValueError:
+        return None
+    return f"{month:02d}/{day:02d}/{year}"
+
+
 def validate_date_of_birth(text: str) -> tuple[bool, str | None]:
     s = (text or "").strip()
     if not s:

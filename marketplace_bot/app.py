@@ -39,6 +39,7 @@ from marketplace_bot.db import SupabaseRepo
 from marketplace_bot.profiles import merge_profile, validate_profile_input, workflow_state_from_profile
 from marketplace_bot.validators import (
     validate_city,
+    normalize_date_of_birth,
     validate_date_of_birth,
     validate_email,
     validate_first_name,
@@ -630,7 +631,8 @@ class BotRuntime:
                 parse_mode="HTML",
             )
             return
-        await state.update_data(date_of_birth=raw)
+        dob_stored = normalize_date_of_birth(raw) or raw
+        await state.update_data(date_of_birth=dob_stored)
         profile_input = await state.get_data()
         await state.clear()
 
