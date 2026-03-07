@@ -80,9 +80,9 @@
       "step": 8,
       "description": "Identity (DOB, SSN)",
       "fields": [
-        {"profile_key": "date_of_birth", "label": "Date of birth (MM/DD/YYYY)", "selector": "#DOB"},
-        {"profile_key": "ssn_formatted", "label": "Social Security Number (or ITIN)", "selector": "#SSN"},
-        {"profile_key": "ssn_formatted", "label": "Confirm Social Security Number (or ITIN)", "selector": "#CONFIRM_SSN"}
+        {"profile_key": "date_of_birth", "label": "Date of birth (MM/DD/YYYY)", "selectors": ["#dateOfBirth", "input[name='dateOfBirth']", "#DOB", "input[name='DOB']", "input[data-testid='applicantDateOfBirth']"], "selector": "#DOB"},
+        {"profile_key": "ssn_formatted", "label": "Social Security Number (or ITIN)", "label_alternates": ["SSN or Individual Tax ID"], "selectors": ["#socialSecurity", "input[name='socialSecurity']", "#SSN", "input[name='SSN']", "input[data-testid='applicantTokenizedTaxpayerId']", "input[autocomplete='off'][name='SSN']"], "selector": "#SSN"},
+        {"profile_key": "ssn_formatted", "label": "Confirm Social Security Number (or ITIN)", "label_alternates": ["Verify SSN or Individual Tax ID"], "selectors": ["#confirmSocialSecurity", "input[name='confirmSocialSecurity']", "#CONFIRM_SSN", "input[name='CONFIRM_SSN']", "input[data-testid='confirm-ssn-field']", "input[autocomplete='off'][name='CONFIRM_SSN']"], "selector": "#CONFIRM_SSN"}
       ],
       "continue_button": "Continue",
       "continue_selector": "button[data-testid='continue-button'], button:has-text('Continue')"

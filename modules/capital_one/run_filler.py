@@ -402,12 +402,32 @@ def fill_step(
         value_str = str(value).strip()
         _log(f"  Field {profile_key}: filling with '{value_str[:20]}{'...' if len(value_str) > 20 else ''}'")
 
-        # Try selector first (for id-based targeting), then label, then placeholder
+        # Try selector(s) first (for id-based targeting), then label, then placeholder
         locator = None
+        selector_candidates = []
+        if field_spec.get("selectors"):
+            selector_candidates.extend([s for s in field_spec.get("selectors", []) if s])
         if field_spec.get("selector"):
-            locator = scope.locator(field_spec["selector"])
+            selector_candidates.append(field_spec["selector"])
+        for sel in selector_candidates:
+            locator = scope.locator(sel)
+            if _count(locator) == 0:
+                locator = page.locator(sel)
+            if _count(locator) > 0:
+                _log(f"  Found input via selector: {sel}")
+                break
         if (locator is None or _count(locator) == 0) and field_spec.get("label"):
             locator = scope.get_by_label(field_spec["label"], exact=False)
+        if (locator is None or _count(locator) == 0) and field_spec.get("label_alternates"):
+            for alt in field_spec.get("label_alternates", []):
+                if not alt:
+                    continue
+                for loc_scope in (scope, page):
+                    locator = loc_scope.get_by_label(alt, exact=False)
+                    if _count(locator) > 0:
+                        break
+                if locator is not None and _count(locator) > 0:
+                    break
         if (locator is None or _count(locator) == 0) and field_spec.get("placeholder"):
             locator = scope.get_by_placeholder(field_spec["placeholder"], exact=False)
         if locator is None or _count(locator) == 0:
